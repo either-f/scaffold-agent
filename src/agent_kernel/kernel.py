@@ -49,6 +49,20 @@ class AgentKernel:
     # ------------------------------------------------------------------- run
     def run(self, user_input: str, state: RunState | None = None) -> RunState:
         state = state or RunState()
+        if state.status == "done":
+            state.turn = max(state.turn, 1) + 1
+            state.step = 0
+            state.status = "running"
+            state.answer = None
+            state.pending_tool = None
+        elif state.status in {"paused", "failed"}:
+            raise ValueError(f"{state.status} run 不能直接续聊")
+        elif state.status != "running":
+            raise ValueError(f"未知 run 状态: {state.status}")
+        elif state.messages:
+            raise ValueError("running run 不能追加新输入，请使用 resume()")
+        else:
+            state.turn = 1
         state.add("user", user_input)
         if self.memory:
             self.memory.add(state.run_id, "user", user_input)
@@ -65,6 +79,8 @@ class AgentKernel:
             raise ValueError("paused checkpoint 缺少 pending_tool")
         if state.status == "paused" and self.approval is None:
             raise PermissionError("恢复待审批工具必须提供 approval")
+        if state.turn == 0:  # 兼容 M2 checkpoint
+            state.turn = 1
         self._emit("run.resume", run_id=state.run_id, step=state.step, status=state.status)
         return self._drive(state)
 

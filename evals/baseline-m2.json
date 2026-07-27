@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-07-27T07:03:06.414573+00:00",
+  "generated_at": "2026-07-27T08:13:53.892476+00:00",
   "mode": "deepseek",
   "model": "deepseek/deepseek-chat",
-  "passed": 8,
+  "passed": 9,
   "total": 10,
   "average_steps": 2.1,
   "results": [
     {
       "id": "read-readme",
-      "passed": false,
+      "passed": true,
       "steps": 2,
       "tools": [
         {
@@ -16,10 +16,8 @@
           "ok": true
         }
       ],
-      "answer": "该项目定位为**一个基于微内核架构的通用Agent框架**，核心设计理念是：内核零第三方依赖，所有外部生态（如模型、工具、规划器）通过标准化的适配器端口（`adapters/`）和规划器端口（`planners/`）接入，保持内核的轻量和纯净。项目从M0（离线运行）到M2（恢复、审批与Eval）逐步演进，集成了DeepSeek、MCP协议、LangChain兼容层，并支持Checkpoint恢复、人工审批（HITL）和离线/在线评估能力，强调可扩展性、可测试性和运行纪律。",
-      "reasons": [
-        "missing_text=['插件端口']"
-      ]
+      "answer": "agent-kernel 是一个采用**微内核 + 插件端口**架构的通用 Agent 框架。其核心定位是：**内核零第三方依赖**，所有外部生态（模型适配器、规划器、工具等）均通过 `adapters/` 和 `planners/` 目录以插件形式接入，保证内核始终可离线运行。项目围绕渐进式里程碑（M0~M3）构建，依次实现了离线运行、DeepSeek/MCP/LangChain 集成、checkpoint 恢复与逐工具审批、PostgreSQL+pgvector 语义记忆、有界多轮上下文压缩等能力，并严格遵循扩展纪律——每个真实适配器必须有 Fake 对照，新依赖必须附带 ADR 与运行证据。",
+      "reasons": []
     },
     {
       "id": "read-m2-plan",
@@ -31,7 +29,7 @@
           "ok": true
         }
       ],
-      "answer": "根据 PLAN.md 中 M2 里程碑的描述，M2（可靠性）的两个重点为：\n\n1. **checkpoint 恢复与 HITL 审批**：实现 `--resume run_id` 让进程被 kill 后能从断点恢复，以及走通 CLI 的 y/n 人工审批流程。\n2. **超时与重试 + 最小 eval 集**：实现超时与重试机制，并建立包含 10 个任务的最小 eval 集和跑分脚本，跑出基线分数写入 README。",
+      "answer": "根据文件内容，M2（可靠性）的两个重点是：\n\n1. **checkpoint 恢复与 HITL 审批**：支持通过 `--resume run_id` 从断点恢复进程，以及 CLI 人工审批（y/n）流程，确保中断后能继续执行。\n2. **超时与重试 + 最小 eval 集**：实现超时重试机制，并建立包含 10 个任务的最小评估集及跑分脚本，用于回归测试和基线分数记录。",
       "reasons": []
     },
     {
@@ -57,7 +55,7 @@
           "ok": true
         }
       ],
-      "answer": "在路径 G:/demo/fuyong/agent-sx/agent-kernel 下搜索文件名模式 *langgraph*，未找到任何匹配的文件。因此，不存在匹配文件。",
+      "answer": "在路径 G:/demo/fuyong/agent-sx/agent-kernel 下搜索文件名模式 *langgraph*，未找到任何匹配的文件，即不存在匹配文件。",
       "reasons": [
         "missing_text=['没有']"
       ]
@@ -85,7 +83,7 @@
           "ok": true
         }
       ],
-      "answer": "## MCP 与 LangChain 的边界（基于 agent-kernel 项目）\n\n### 1. 架构定位\n- **内核零第三方依赖**：agent-kernel 的微内核本身不依赖 MCP 或 LangChain，所有第三方 import 只允许出现在 `adapters/` 与 `planners/` 目录中。\n\n### 2. LangChain 的边界\n- **只提供兼容层，不接管运行时**：LangChain Core 只用于包装 `BaseChatModel → ModelPort` 和 `BaseTool → ToolPort`，作为适配器层。\n- **LangChain Agent/Chain 运行时不被放进内核**：内核使用原生 ReAct JSON 动作协议，不依赖 LangChain 的 Agent 循环。\n- **LangGraph 留到 M5**：当前 M1 阶段不使用 LangGraph，待出现真实分支/循环工作流时再实现 LangGraph Planner。\n\n### 3. MCP 的边界\n- **MCP 作为工具端口**：MCP Python SDK 固定版本 `>=1.28,<2`（暂不采用仍在迁移期的 v2）。\n- **同步桥接**：同步 `ToolPort` 由后台 `asyncio.Runner` 串行桥接长生命周期 stdio 会话，工具名加 server 前缀并默认拒绝。\n- **生命周期管理**：Filesystem 与 Fetch 共用一个可正确关闭的生命周期，当前工具调用串行，只有并发成为瓶颈时才拆成每 server worker。\n\n### 4. 总结\n| 维度 | MCP | LangChain |\n|------|-----|-----------|\n| 角色 | 工具端口（ToolPort） | 模型端口（ModelPort）+ 工具兼容层 |\n| 进入内核？ | 否，通过 adapter 接入 | 否，通过 adapter 接入 |\n| 运行时控制 | 内核控制 ReAct 循环 | 不接管 Agent 循环 |\n| 版本策略 | 固定 `<2`，待 v2 稳定后升级 | 仅用 Core 包，不用 Agent/Chain |\n| 未来规划 | M2 加入超时/重试/恢复 | M5 引入 LangGraph Planner |",
+      "answer": "## MCP 与 LangChain 的边界\n\n根据 `README.md` 和 `ADR-0002` 的说明，MCP 与 LangChain 在 agent-kernel 项目中的边界划分如下：\n\n### 1. 职责分工\n\n- **MCP（Model Context Protocol）**：负责**工具层（ToolPort）**。通过 MCP Python SDK 连接外部工具服务器（如 Filesystem、Fetch），提供工具调用能力。MCP 工具以 stdio 长生命周期会话运行，工具名加 server 前缀，默认拒绝未授权的工具。\n- **LangChain**：仅作为**兼容层**，负责两件事：\n  - `BaseChatModel → ModelPort`：将 LangChain 的聊天模型包装为内核的模型端口。\n  - `BaseTool → ToolPort`：将 LangChain 的工具包装为内核的工具端口。\n\n### 2. 内核不依赖 LangChain 运行时\n\n- **内核（AgentKernel）不引入 LangChain 的 Agent/Chain 运行时**，而是使用原生的 ReAct JSON 动作协议驱动 Agent 循环。\n- LangGraph 等复杂工作流框架被推迟到 M5 阶段，当前 M1 阶段不纳入。\n\n### 3. 技术实现细节\n\n- MCP Python SDK 固定版本 `>=1.28,<2`，暂不升级到仍在迁移期的 v2。\n- MCP 工具调用是**串行**的（通过后台 `asyncio.Runner` 桥接），只有并发成为瓶颈时才拆为每 server 独立 worker。\n- LiteLLM 只实现 `ModelPort`，不参与工具调用。\n\n### 4. 边界总结\n\n| 层次 | 负责方 | 说明 |\n|------|--------|------|\n| 模型调用 | LangChain → ModelPort | 仅包装 BaseChatModel，不控制循环 |\n| 工具调用 | MCP → ToolPort | 通过 MCP 协议连接外部工具 |\n| Agent 循环 | 内核原生 ReAct | 不依赖 LangChain Agent/Chain |\n| 复杂工作流 | 预留至 M5 | LangGraph 等后续引入 |\n\n**一句话概括**：MCP 管工具，LangChain 管模型兼容，内核自己管 Agent 循环，三者各司其职，互不越界。",
       "reasons": []
     },
     {
@@ -141,7 +139,7 @@
           "ok": true
         }
       ],
-      "answer": "## 综合说明\n\n### 1. 本地文件：`README.md`\n\n该文件位于 `G:/demo/fuyong/agent-sx/agent-kernel/README.md`，描述了一个名为 **agent-kernel** 的项目。它是一个**微内核 + 插件端口**的通用 agent 框架，内核零第三方依赖，外部生态只进入 `adapters/` 与 `planners/` 目录。项目规划了多个里程碑（M0~M2），包括离线运行、集成 DeepSeek + MCP + LangChain、恢复与审批机制、Eval 评测等。特别值得注意的是，README 中明确提到 M1 的 Fetch MCP server 演示参数 guard **只允许 `https://example.com`**，这与第二步获取的网页地址完全对应。\n\n### 2. 网页：`https://example.com`\n\n该网页是 IANA（互联网号码分配机构）保留的**示例域名**，内容非常简单，仅包含一个标题 \"Example Domain\" 和一段说明文字，表明该域名专供文档示例使用，无需申请权限，但应避免用于实际运营。\n\n### 3. 两者关联\n\nREADME.md 中明确将 `https://example.com` 作为 Fetch MCP server 的参数 guard 演示目标，而实际获取到的内容也确实是标准的示例页面。这说明 agent-kernel 框架的 MCP 集成能够正确限制 Fetch 工具的访问范围，仅允许访问白名单中的 URL，体现了框架的安全设计理念。\n\n**总结**：README.md 描述了一个注重安全、模块化、可扩展的 agent 框架，而 `https://example.com` 是其安全机制演示中使用的示例目标，两者在项目文档和实际功能上形成了闭环验证。",
+      "answer": "{\"thought\":\"已成功获取README.md和https://example.com的内容。现在综合说明两者。\\n\\nREADME.md 描述的是一个名为 agent-kernel 的通用 agent 框架，采用微内核+插件端口架构，内核零第三方依赖。它支持离线运行、DeepSeek+MCP+LangChain 集成、恢复与审批、PostgreSQL+pgvector 语义记忆、有界多轮上下文等功能。其中提到 M1 阶段会启动两个 stdio MCP server，Fetch 演示参数 guard 只允许 https://example.com。\\n\\n而 https://example.com 是一个示例域名，用于文档中的示例，无需权限即可使用，内容非常简单，仅包含标题和一段说明文字。\\n\\n两者之间的关系是：agent-kernel 框架在 M1 阶段将 https://example.com 作为 Fetch MCP server 的演示白名单地址，用于展示参数守卫功能——即该 MCP server 只允许访问这个特定的示例域名。\", \"final\": \"## 综合说明\\n\\n### 1. 本地文件：`README.md`\\n\\n该文件描述了一个名为 **agent-kernel** 的通用 agent 框架，采用**微内核 + 插件端口**架构，内核零第三方依赖。主要特性包括：\\n\\n- **M0：离线运行** — 无需外部依赖即可运行 demo 和测试。\\n- **M1：DeepSeek + MCP + LangChain** — 集成 DeepSeek 模型、MCP 服务器和 LangChain 兼容层。其中会启动两个 stdio MCP server：\\n  - **Filesystem**：仅允许访问当前 `agent-kernel/` 目录。\\n  - **Fetch**：演示参数 guard，**只允许访问 `https://example.com`**。\\n- **M2：恢复、审批与 Eval** — 支持原子 checkpoint、逐工具 CLI 审批、运行恢复和离线/真实评测。\\n- **M3A：PostgreSQL + pgvector 语义记忆** — 使用 Docker 启动 pgvector 数据库，通过 DashScope 嵌入实现语义检索。\\n- **M3B：有界多轮上下文** — 支持长上下文压缩、工具结果卸载到 artifact 文件。\\n\\n### 2. 网页：`https://example.com`\\n\\n这是一个**示例域名**，由 IANA 保留用于文档和示例中，无需权限即可使用。页面内容非常简单，仅包含标题 \\\"Example Domain\\\" 和一段说明文字，强调该域名仅供示例使用，不应在实际运营中使用。\\n\\n### 3. 两者关系\\n\\n在 agent-kernel 框架的 **M1 阶段**，`https://example.com` 被用作 **Fetch MCP server 的参数守卫（guard）演示地址**。这意味着该 MCP server 被配置为只允许访问这一个特定的 URL，用于展示框架的安全控制能力——即 agent 在调用外部工具时，可以通过白名单机制限制可访问的资源范围，防止滥用。\\n\\n简而言之：**README.md 描述了框架的设计与能力，而 https://example.com 是框架中一个演示用例的目标地址，用于验证参数守卫功能。**\"",
       "reasons": []
     }
   ]

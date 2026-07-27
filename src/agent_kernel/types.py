@@ -58,6 +58,9 @@ class RunState:
     status: str = "running"  # running | done | failed | paused
     answer: str | None = None
     pending_tool: ToolCall | None = None
+    turn: int = 0
+    context_summary: str = ""
+    summarized_message_count: int = 0
 
     def add(self, role: str, content: str, name: str | None = None) -> None:
         self.messages.append(Message(role, content, name))

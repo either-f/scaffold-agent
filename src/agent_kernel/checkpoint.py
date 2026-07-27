@@ -20,7 +20,8 @@ class JsonCheckpointStore(CheckpointStore):
         run_dir = self.root / state.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         data = json.dumps(state.to_dict(), ensure_ascii=False, indent=2)
-        self._atomic_write(run_dir / f"step_{state.step:03d}.json", data)
+        turn = state.turn or 1
+        self._atomic_write(run_dir / f"turn_{turn:03d}_step_{state.step:03d}.json", data)
         self._atomic_write(run_dir / "latest.json", data)
 
     def load(self, run_id: str) -> RunState | None:

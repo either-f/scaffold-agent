@@ -15,4 +15,5 @@ jobs:
           python-version: "3.11"
       - run: python tests/test_smoke.py
       - run: python evals/run_eval.py --mode offline
+      - run: python evals/run_m3.py context
       - run: python -m compileall -q src examples evals
