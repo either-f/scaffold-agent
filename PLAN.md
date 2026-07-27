@@ -123,13 +123,14 @@ agent-kernel/
 - 产出：上表全部文件；纯标准库、离线可跑；demo 演示"两次工具调用→最终答案"，全程事件可见、每步 checkpoint。
 - 验收：`python examples/run_demo.py` 输出正确答案；`python tests/test_smoke.py` 通过。
 
-### M1 接真实世界（3–5 天）
+### M1 接真实世界 ✅
 - LiteLLM adapter 联调 1–2 家模型；MCP adapter 完成（stdio 起服务、list_tools、call）；接入 2 个现成 MCP server（filesystem、fetch）；主链跑通后补最薄的 LangChain `BaseChatModel` / `BaseTool` 兼容 adapter。
 - 验收：真模型 + MCP 工具跑通同一 demo；工具白名单配置生效；任选一个 LangChain 模型或工具无需修改内核即可替换接入。
 
-### M2 可靠性（4–6 天）
+### M2 可靠性 ✅
 - checkpoint 恢复（`--resume run_id`）；HITL 审批走通（CLI y/n）；超时与重试；最小 eval 集（10 个任务）+ 跑分脚本。
 - 验收：kill 掉进程后能从断点恢复；eval 出基线分数并写入 README。
+- 实测：真实进程在第二个工具审批处中断后从 pending tool 恢复；离线 eval 10/10，DeepSeek + 只读 MCP 8/10。
 
 ### M3 记忆与上下文工程（5–7 天）
 - Postgres + pgvector adapter（Mem0 风格接口）；上下文组装管线：offload（长内容落盘引用）、reduce（历史压缩摘要）、按需检索。

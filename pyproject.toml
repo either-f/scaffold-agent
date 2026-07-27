@@ -10,7 +10,6 @@ model = ["litellm>=1.93,<2"]
 mcp = ["mcp>=1.28,<2", "mcp-server-fetch==2026.7.10"]
 langchain = ["langchain-core>=1.4,<2"]
 obs = ["opentelemetry-sdk", "langfuse"]
-eval = ["deepeval"]
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -54,11 +54,29 @@ class AgentKernel:
             self.memory.add(state.run_id, "user", user_input)
         self._emit("run.start", run_id=state.run_id, input=user_input)
         self._checkpoint(state)
+        return self._drive(state)
 
-        while state.status == "running":
+    def resume(self, state: RunState) -> RunState:
+        if state.status in {"done", "failed"}:
+            raise ValueError(f"终态 run 不能恢复: {state.status}")
+        if state.status not in {"running", "paused"}:
+            raise ValueError(f"未知 run 状态: {state.status}")
+        if state.status == "paused" and state.pending_tool is None:
+            raise ValueError("paused checkpoint 缺少 pending_tool")
+        if state.status == "paused" and self.approval is None:
+            raise PermissionError("恢复待审批工具必须提供 approval")
+        self._emit("run.resume", run_id=state.run_id, step=state.step, status=state.status)
+        return self._drive(state)
+
+    def _drive(self, state: RunState) -> RunState:
+        while state.status in {"running", "paused"}:
+            if state.pending_tool is not None:
+                self._run_pending_tool(state)
+                continue
             if state.step >= self.max_steps:
                 state.status = "failed"
                 state.answer = "已达最大步数限制。"
+                self._checkpoint(state)
                 break
             state.step += 1
             self._emit("step.start", run_id=state.run_id, step=state.step)
@@ -73,26 +91,51 @@ class AgentKernel:
                     self.memory.add(state.run_id, "assistant", action.content)
             elif isinstance(action, ToolCall):
                 self._emit("tool.before", run_id=state.run_id, tool=action.name, args=action.args)
-                if self.approval and not self.approval(action):
-                    result = f"[HITL] 用户否决了工具调用 {action.name}。"
-                else:
-                    try:
-                        result = self.tools.call(action.name, action.args)
-                    except Exception as exc:  # 工具失败也要回灌上下文，让模型自己纠错
-                        result = f"[tool-error] {exc}"
-                self._emit("tool.after", run_id=state.run_id, tool=action.name, result=result)
-                state.add(
-                    "assistant",
-                    json.dumps(
-                        {"thought": action.thought, "tool": action.name, "args": action.args},
-                        ensure_ascii=False,
-                    ),
-                )
-                state.add("tool", result, name=action.name)
-                if self.memory:
-                    self.memory.add(state.run_id, "tool", f"{action.name}: {result}")
+                state.pending_tool = action
+                state.status = "paused" if self.approval else "running"
 
             self._checkpoint(state)
 
         self._emit("run.end", run_id=state.run_id, status=state.status, answer=state.answer)
         return state
+
+    def _run_pending_tool(self, state: RunState) -> None:
+        action = state.pending_tool
+        assert action is not None
+
+        if state.status == "paused":
+            assert self.approval is not None  # resume() 与创建 pending 时已保证
+            approved = self.approval(action)
+            self._emit(
+                "tool.approval",
+                run_id=state.run_id,
+                tool=action.name,
+                args=action.args,
+                approved=approved,
+            )
+            state.status = "running"
+            if not approved:
+                self._finish_tool(state, action, f"[HITL] 用户否决了工具调用 {action.name}。")
+                return
+            self._checkpoint(state)  # 持久化批准；恢复后不重复询问
+
+        try:
+            result = self.tools.call(action.name, action.args)
+        except Exception as exc:  # 工具失败也要回灌上下文，让模型自己纠错
+            result = f"[tool-error] {exc}"
+        self._finish_tool(state, action, result)
+
+    def _finish_tool(self, state: RunState, action: ToolCall, result: str) -> None:
+        self._emit("tool.after", run_id=state.run_id, tool=action.name, result=result)
+        state.add(
+            "assistant",
+            json.dumps(
+                {"thought": action.thought, "tool": action.name, "args": action.args},
+                ensure_ascii=False,
+            ),
+        )
+        state.add("tool", result, name=action.name)
+        if self.memory:
+            self.memory.add(state.run_id, "tool", f"{action.name}: {result}")
+        state.pending_tool = None
+        self._checkpoint(state)

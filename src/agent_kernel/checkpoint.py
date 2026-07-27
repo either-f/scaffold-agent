@@ -5,6 +5,7 @@ M3 起可新增 sqlite/Postgres adapter，接口不变。
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from .ports import CheckpointStore
@@ -19,11 +20,20 @@ class JsonCheckpointStore(CheckpointStore):
         run_dir = self.root / state.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         data = json.dumps(state.to_dict(), ensure_ascii=False, indent=2)
-        (run_dir / f"step_{state.step:03d}.json").write_text(data, encoding="utf-8")
-        (run_dir / "latest.json").write_text(data, encoding="utf-8")
+        self._atomic_write(run_dir / f"step_{state.step:03d}.json", data)
+        self._atomic_write(run_dir / "latest.json", data)
 
     def load(self, run_id: str) -> RunState | None:
         latest = self.root / run_id / "latest.json"
         if not latest.exists():
             return None
         return RunState.from_dict(json.loads(latest.read_text(encoding="utf-8")))
+
+    @staticmethod
+    def _atomic_write(path: Path, data: str) -> None:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_text(data, encoding="utf-8")
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)

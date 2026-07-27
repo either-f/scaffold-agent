@@ -1,0 +1,148 @@
+{
+  "generated_at": "2026-07-27T07:03:06.414573+00:00",
+  "mode": "deepseek",
+  "model": "deepseek/deepseek-chat",
+  "passed": 8,
+  "total": 10,
+  "average_steps": 2.1,
+  "results": [
+    {
+      "id": "read-readme",
+      "passed": false,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.read_text_file",
+          "ok": true
+        }
+      ],
+      "answer": "该项目定位为**一个基于微内核架构的通用Agent框架**，核心设计理念是：内核零第三方依赖，所有外部生态（如模型、工具、规划器）通过标准化的适配器端口（`adapters/`）和规划器端口（`planners/`）接入，保持内核的轻量和纯净。项目从M0（离线运行）到M2（恢复、审批与Eval）逐步演进，集成了DeepSeek、MCP协议、LangChain兼容层，并支持Checkpoint恢复、人工审批（HITL）和离线/在线评估能力，强调可扩展性、可测试性和运行纪律。",
+      "reasons": [
+        "missing_text=['插件端口']"
+      ]
+    },
+    {
+      "id": "read-m2-plan",
+      "passed": true,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.read_text_file",
+          "ok": true
+        }
+      ],
+      "answer": "根据 PLAN.md 中 M2 里程碑的描述，M2（可靠性）的两个重点为：\n\n1. **checkpoint 恢复与 HITL 审批**：实现 `--resume run_id` 让进程被 kill 后能从断点恢复，以及走通 CLI 的 y/n 人工审批流程。\n2. **超时与重试 + 最小 eval 集**：实现超时与重试机制，并建立包含 10 个任务的最小 eval 集和跑分脚本，跑出基线分数写入 README。",
+      "reasons": []
+    },
+    {
+      "id": "list-adrs",
+      "passed": true,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.list_directory",
+          "ok": true
+        }
+      ],
+      "answer": "前两条 ADR 编号是 0001 和 0002。",
+      "reasons": []
+    },
+    {
+      "id": "search-langgraph",
+      "passed": false,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.search_files",
+          "ok": true
+        }
+      ],
+      "answer": "在路径 G:/demo/fuyong/agent-sx/agent-kernel 下搜索文件名模式 *langgraph*，未找到任何匹配的文件。因此，不存在匹配文件。",
+      "reasons": [
+        "missing_text=['没有']"
+      ]
+    },
+    {
+      "id": "pyproject-info",
+      "passed": true,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.get_file_info",
+          "ok": true
+        }
+      ],
+      "answer": "文件名：pyproject.toml，它是一个文件（不是目录）。",
+      "reasons": []
+    },
+    {
+      "id": "read-multiple",
+      "passed": true,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.read_multiple_files",
+          "ok": true
+        }
+      ],
+      "answer": "## MCP 与 LangChain 的边界（基于 agent-kernel 项目）\n\n### 1. 架构定位\n- **内核零第三方依赖**：agent-kernel 的微内核本身不依赖 MCP 或 LangChain，所有第三方 import 只允许出现在 `adapters/` 与 `planners/` 目录中。\n\n### 2. LangChain 的边界\n- **只提供兼容层，不接管运行时**：LangChain Core 只用于包装 `BaseChatModel → ModelPort` 和 `BaseTool → ToolPort`，作为适配器层。\n- **LangChain Agent/Chain 运行时不被放进内核**：内核使用原生 ReAct JSON 动作协议，不依赖 LangChain 的 Agent 循环。\n- **LangGraph 留到 M5**：当前 M1 阶段不使用 LangGraph，待出现真实分支/循环工作流时再实现 LangGraph Planner。\n\n### 3. MCP 的边界\n- **MCP 作为工具端口**：MCP Python SDK 固定版本 `>=1.28,<2`（暂不采用仍在迁移期的 v2）。\n- **同步桥接**：同步 `ToolPort` 由后台 `asyncio.Runner` 串行桥接长生命周期 stdio 会话，工具名加 server 前缀并默认拒绝。\n- **生命周期管理**：Filesystem 与 Fetch 共用一个可正确关闭的生命周期，当前工具调用串行，只有并发成为瓶颈时才拆成每 server worker。\n\n### 4. 总结\n| 维度 | MCP | LangChain |\n|------|-----|-----------|\n| 角色 | 工具端口（ToolPort） | 模型端口（ModelPort）+ 工具兼容层 |\n| 进入内核？ | 否，通过 adapter 接入 | 否，通过 adapter 接入 |\n| 运行时控制 | 内核控制 ReAct 循环 | 不接管 Agent 循环 |\n| 版本策略 | 固定 `<2`，待 v2 稳定后升级 | 仅用 Core 包，不用 Agent/Chain |\n| 未来规划 | M2 加入超时/重试/恢复 | M5 引入 LangGraph Planner |",
+      "reasons": []
+    },
+    {
+      "id": "directory-tree",
+      "passed": true,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.directory_tree",
+          "ok": true
+        }
+      ],
+      "answer": "该目录下的两个子目录名称是：adapters 和 planners。",
+      "reasons": []
+    },
+    {
+      "id": "allowed-directory",
+      "passed": true,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "filesystem.list_allowed_directories",
+          "ok": true
+        }
+      ],
+      "answer": "Filesystem MCP 被限制在项目目录：G:\\demo\\fuyong\\agent-sx\\agent-kernel",
+      "reasons": []
+    },
+    {
+      "id": "fetch-example",
+      "passed": true,
+      "steps": 2,
+      "tools": [
+        {
+          "name": "fetch.fetch",
+          "ok": true
+        }
+      ],
+      "answer": "页面标题是：Example Domain",
+      "reasons": []
+    },
+    {
+      "id": "read-and-fetch",
+      "passed": true,
+      "steps": 3,
+      "tools": [
+        {
+          "name": "filesystem.read_text_file",
+          "ok": true
+        },
+        {
+          "name": "fetch.fetch",
+          "ok": true
+        }
+      ],
+      "answer": "## 综合说明\n\n### 1. 本地文件：`README.md`\n\n该文件位于 `G:/demo/fuyong/agent-sx/agent-kernel/README.md`，描述了一个名为 **agent-kernel** 的项目。它是一个**微内核 + 插件端口**的通用 agent 框架，内核零第三方依赖，外部生态只进入 `adapters/` 与 `planners/` 目录。项目规划了多个里程碑（M0~M2），包括离线运行、集成 DeepSeek + MCP + LangChain、恢复与审批机制、Eval 评测等。特别值得注意的是，README 中明确提到 M1 的 Fetch MCP server 演示参数 guard **只允许 `https://example.com`**，这与第二步获取的网页地址完全对应。\n\n### 2. 网页：`https://example.com`\n\n该网页是 IANA（互联网号码分配机构）保留的**示例域名**，内容非常简单，仅包含一个标题 \"Example Domain\" 和一段说明文字，表明该域名专供文档示例使用，无需申请权限，但应避免用于实际运营。\n\n### 3. 两者关联\n\nREADME.md 中明确将 `https://example.com` 作为 Fetch MCP server 的参数 guard 演示目标，而实际获取到的内容也确实是标准的示例页面。这说明 agent-kernel 框架的 MCP 集成能够正确限制 Fetch 工具的访问范围，仅允许访问白名单中的 URL，体现了框架的安全设计理念。\n\n**总结**：README.md 描述了一个注重安全、模块化、可扩展的 agent 框架，而 `https://example.com` 是其安全机制演示中使用的示例目标，两者在项目文档和实际功能上形成了闭环验证。",
+      "reasons": []
+    }
+  ]
+}
