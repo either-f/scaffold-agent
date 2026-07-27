@@ -11,7 +11,8 @@ from __future__ import annotations
 import json
 
 from ..ports import MemoryPort, ModelPort, PlannerPort, ToolPort
-from ..types import Action, FinalAnswer, RunState, ToolCall
+from ..types import Action, FinalAnswer, Message, RunState, ToolCall
+from .context import ContextBuilder
 
 SYSTEM_TMPL = """你是一个会使用工具的助手。可用工具：
 {tools}
@@ -24,6 +25,9 @@ SYSTEM_TMPL = """你是一个会使用工具的助手。可用工具：
 
 
 class ReactPlanner(PlannerPort):
+    def __init__(self, context_builder: ContextBuilder | None = None) -> None:
+        self.context_builder = context_builder or ContextBuilder()
+
     def step(
         self,
         state: RunState,
@@ -49,10 +53,8 @@ class ReactPlanner(PlannerPort):
             if hits:
                 mem_block = "相关记忆：\n" + "\n".join(f"- {h}" for h in hits)
 
-        from ..types import Message  # 局部 import 避免循环
-
-        prompt = [Message("system", SYSTEM_TMPL.format(tools=tool_desc, memory=mem_block))]
-        prompt += state.messages
+        system = Message("system", SYSTEM_TMPL.format(tools=tool_desc, memory=mem_block))
+        prompt = self.context_builder.build(system, state, model)
         output = model.complete(prompt, tool_specs)
         return self._parse(output.text)
 

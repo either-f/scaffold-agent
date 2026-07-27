@@ -98,6 +98,8 @@ def test_resume_guards_and_pending_at_step_limit():
         {"run_id": "legacy", "messages": [], "step": 1, "status": "running", "answer": None}
     )
     assert legacy.pending_tool is None
+    assert legacy.turn == 0 and legacy.context_summary == ""
+    assert legacy.summarized_message_count == 0
 
     kernel = AgentKernel(
         model=FakeScriptedModel([]),
@@ -130,6 +132,45 @@ def test_resume_guards_and_pending_at_step_limit():
     ).resume(pending)
     assert calls == ["1+1"]
     assert result.pending_tool is None and result.status == "failed"
+
+
+def test_multi_turn_and_checkpoint_compatibility():
+    with tempfile.TemporaryDirectory() as tmp:
+        store = JsonCheckpointStore(tmp)
+        kernel = AgentKernel(
+            model=FakeScriptedModel(
+                [
+                    '{"thought": "t", "final": "第一轮"}',
+                    '{"thought": "t", "final": "第二轮"}',
+                ]
+            ),
+            tools=default_toolbox(),
+            planner=ReactPlanner(),
+            checkpoints=store,
+        )
+        state = kernel.run("第一问")
+        run_id = state.run_id
+        assert state.turn == 1 and state.step == 1
+
+        state = kernel.run("第二问", state)
+        assert state.run_id == run_id
+        assert state.turn == 2 and state.step == 1 and state.answer == "第二轮"
+        assert [message.content for message in state.messages if message.role == "user"] == [
+            "第一问",
+            "第二问",
+        ]
+        run_dir = store.root / run_id
+        assert (run_dir / "turn_001_step_001.json").exists()
+        assert (run_dir / "turn_002_step_001.json").exists()
+        latest = store.load(run_id)
+        assert latest is not None and latest.turn == 2 and latest.answer == "第二轮"
+
+    for status in ("paused", "failed"):
+        try:
+            kernel.run("不应追加", RunState(status=status))
+            raise AssertionError(f"状态应拒绝续聊: {status}")
+        except ValueError:
+            pass
 
 
 def test_planner_retrieves_by_latest_user_message():
@@ -171,5 +212,6 @@ if __name__ == "__main__":
     test_hitl_veto()
     test_resume_pending_approval()
     test_resume_guards_and_pending_at_step_limit()
+    test_multi_turn_and_checkpoint_compatibility()
     test_planner_retrieves_by_latest_user_message()
     print("OK: 全部冒烟测试通过")

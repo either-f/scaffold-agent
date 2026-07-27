@@ -79,7 +79,7 @@ M2 基线（2026-07-27）：
 | 模式 | 模型 | 通过率 | 平均步数 |
 |---|---|---:|---:|
 | 离线门禁 | FakeScriptedModel | 10/10 | 2.1 |
-| 真实链路 | deepseek/deepseek-chat | 8/10 | 2.1 |
+| 真实链路 | deepseek/deepseek-chat | 9/10 | 2.1 |
 
 真实逐题结果见 [evals/baseline-m2.json](evals/baseline-m2.json)。
 
@@ -104,10 +104,35 @@ $env:DASHSCOPE_API_KEY = "你的密钥"
 
 `PgVectorMemory` 只保存 user 和最终 assistant 原消息，以构造参数中的 namespace 隔离；
 tool 结果不会进入长期记忆。首版使用 `text-embedding-v4` 的 1024 维向量和精确余弦检索，
-不做事实抽取、HNSW 或连接池。M3B 的多轮上下文压缩会在 M3A 合并后单独交付。
+不做事实抽取、HNSW 或连接池。
 
 M3A 基线（2026-07-27）：语义查询 `5/5`，去重、tool 排除和 namespace 隔离均通过。
 完整结果见 [evals/baseline-m3.json](evals/baseline-m3.json)。
+
+## M3B：有界多轮上下文
+
+已完成的 `RunState` 可以用同一 `run_id` 继续调用 `AgentKernel.run()`；每轮 step 重新计数，
+checkpoint 按 `turn_<NNN>_step_<NNN>.json` 保存，旧 checkpoint 仍可加载。
+`ReactPlanner` 的默认 `ContextBuilder` 在约 24,000 字符时把较早历史增量压缩为不超过
+2,000 字符的摘要，同时保留 `RunState.messages` 完整审计记录。`OffloadingToolbox` 会把超过
+8,000 字符的工具结果原子写入 `runs/artifacts/<sha256>.txt`，只把路径、长度和首尾预览回传模型。
+
+离线运行 50 轮上下文与 artifact 门禁：
+
+```powershell
+.venv\Scripts\python.exe evals\run_m3.py context
+```
+
+数据库、DashScope、DeepSeek 均就绪后运行全部 M3 验收并刷新基线：
+
+```powershell
+.venv\Scripts\python.exe evals\run_m3.py all --output evals/baseline-m3.json
+```
+
+M3B 离线基线（2026-07-27）：50/50 轮完成，增量摘要 2 次，最大 ReAct prompt
+23,342 字符；多轮 checkpoint 与 artifact 完整回读均通过。真实跨会话验收中，第二个
+DeepSeek 会话成功从 pgvector 回答项目代号 `Mercury` 与中文偏好；完整结果见
+[evals/baseline-m3.json](evals/baseline-m3.json)。
 
 完整规划见 [PLAN.md](PLAN.md)。
 

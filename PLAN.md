@@ -130,13 +130,14 @@ agent-kernel/
 ### M2 可靠性 ✅
 - checkpoint 恢复（`--resume run_id`）；HITL 审批走通（CLI y/n）；超时与重试；最小 eval 集（10 个任务）+ 跑分脚本。
 - 验收：kill 掉进程后能从断点恢复；eval 出基线分数并写入 README。
-- 实测：真实进程在第二个工具审批处中断后从 pending tool 恢复；离线 eval 10/10，DeepSeek + 只读 MCP 8/10。
+- 实测：真实进程在第二个工具审批处中断后从 pending tool 恢复；离线 eval 10/10，DeepSeek + 只读 MCP 9/10。
 
-### M3 记忆与上下文工程（5–7 天）
+### M3 记忆与上下文工程 ✅
 - Postgres + pgvector adapter（Mem0 风格接口）；上下文组装管线：offload（长内容落盘引用）、reduce（历史压缩摘要）、按需检索。
 - 验收：50 轮长对话不爆上下文；关键信息跨会话可检索；eval 分数不降。
 - M3A 已完成：pgvector 精确余弦检索、DashScope 1024 维 embedding、namespace 隔离；真实语义检索 5/5。
-- M3B 待 M3A 合并后交付；M3 整体尚未完成。
+- M3B 已完成：同 run_id 多轮续聊、turn/step checkpoint、长工具结果外置与增量历史摘要。
+- 实测：50 轮离线对话最大 ReAct prompt 23,342 字符；DeepSeek 跨会话正确回忆 `Mercury` 与中文偏好。
 
 ### M4 Skill 与沙箱（3–4 天）
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
