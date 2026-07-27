@@ -83,6 +83,32 @@ M2 基线（2026-07-27）：
 
 真实逐题结果见 [evals/baseline-m2.json](evals/baseline-m2.json)。
 
+## M3A：PostgreSQL + pgvector 语义记忆
+
+启动项目固定版本的 pgvector 数据库，并安装记忆依赖：
+
+```powershell
+docker compose up -d postgres
+$env:UV_CACHE_DIR = "$PWD\.cache\uv"
+$env:UV_PROJECT_ENVIRONMENT = "$PWD\.venv"
+.tools\uv\Scripts\uv.exe sync --extra model --extra memory
+```
+
+默认连接为 `postgresql://agent:agent@127.0.0.1:5432/agent_memory`，可通过
+`AGENT_MEMORY_DSN` 覆盖。设置现有 DashScope 密钥后运行真实语义检索验收：
+
+```powershell
+$env:DASHSCOPE_API_KEY = "你的密钥"
+.venv\Scripts\python.exe evals\run_m3.py memory --output evals/baseline-m3.json
+```
+
+`PgVectorMemory` 只保存 user 和最终 assistant 原消息，以构造参数中的 namespace 隔离；
+tool 结果不会进入长期记忆。首版使用 `text-embedding-v4` 的 1024 维向量和精确余弦检索，
+不做事实抽取、HNSW 或连接池。M3B 的多轮上下文压缩会在 M3A 合并后单独交付。
+
+M3A 基线（2026-07-27）：语义查询 `5/5`，去重、tool 排除和 namespace 隔离均通过。
+完整结果见 [evals/baseline-m3.json](evals/baseline-m3.json)。
+
 完整规划见 [PLAN.md](PLAN.md)。
 
 ## 扩展纪律

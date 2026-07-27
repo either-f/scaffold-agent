@@ -39,7 +39,13 @@ class ReactPlanner(PlannerPort):
         ) or "(无)"
         mem_block = ""
         if memory and state.messages:
-            hits = memory.search(state.messages[-1].content, k=3)
+            query = next((m.content for m in reversed(state.messages) if m.role == "user"), "")
+            current_context = {m.content for m in state.messages}
+            hits = (
+                [hit for hit in memory.search(query, k=8) if hit not in current_context][:3]
+                if query
+                else []
+            )
             if hits:
                 mem_block = "相关记忆：\n" + "\n".join(f"- {h}" for h in hits)
 

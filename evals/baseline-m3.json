@@ -1,0 +1,64 @@
+{
+  "generated_at": "2026-07-27T07:56:13.490674+00:00",
+  "suite": "memory",
+  "model": "dashscope/text-embedding-v4",
+  "dimensions": 1024,
+  "passed": 5,
+  "total": 5,
+  "duplicate_ok": true,
+  "tool_ignored": true,
+  "namespace_isolated": true,
+  "results": [
+    {
+      "query": "应该用哪种语言回答用户？",
+      "keyword": "中文",
+      "hits": [
+        "用户偏好使用中文交流。",
+        "默认 embedding 模型是 text-embedding-v4，维度为 1024。",
+        "M3 的数据库选择是 PostgreSQL 和 pgvector。"
+      ],
+      "passed": true
+    },
+    {
+      "query": "这个项目的代号叫什么？",
+      "keyword": "Mercury",
+      "hits": [
+        "项目内部代号是水星 Mercury。",
+        "用户偏好使用中文交流。",
+        "M3 首版采用精确余弦检索，不创建 HNSW 索引。"
+      ],
+      "passed": true
+    },
+    {
+      "query": "长期记忆使用什么数据库？",
+      "keyword": "pgvector",
+      "hits": [
+        "M3 的数据库选择是 PostgreSQL 和 pgvector。",
+        "M3 首版采用精确余弦检索，不创建 HNSW 索引。",
+        "用户偏好使用中文交流。"
+      ],
+      "passed": true
+    },
+    {
+      "query": "向量模型默认输出多少维？",
+      "keyword": "1024",
+      "hits": [
+        "默认 embedding 模型是 text-embedding-v4，维度为 1024。",
+        "M3 的数据库选择是 PostgreSQL 和 pgvector。",
+        "M3 首版采用精确余弦检索，不创建 HNSW 索引。"
+      ],
+      "passed": true
+    },
+    {
+      "query": "首版会建立近似向量索引吗？",
+      "keyword": "HNSW",
+      "hits": [
+        "M3 首版采用精确余弦检索，不创建 HNSW 索引。",
+        "M3 的数据库选择是 PostgreSQL 和 pgvector。",
+        "默认 embedding 模型是 text-embedding-v4，维度为 1024。"
+      ],
+      "passed": true
+    }
+  ],
+  "ok": true
+}

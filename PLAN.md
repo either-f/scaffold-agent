@@ -135,6 +135,8 @@ agent-kernel/
 ### M3 记忆与上下文工程（5–7 天）
 - Postgres + pgvector adapter（Mem0 风格接口）；上下文组装管线：offload（长内容落盘引用）、reduce（历史压缩摘要）、按需检索。
 - 验收：50 轮长对话不爆上下文；关键信息跨会话可检索；eval 分数不降。
+- M3A 已完成：pgvector 精确余弦检索、DashScope 1024 维 embedding、namespace 隔离；真实语义检索 5/5。
+- M3B 待 M3A 合并后交付；M3 整体尚未完成。
 
 ### M4 Skill 与沙箱（3–4 天）
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
