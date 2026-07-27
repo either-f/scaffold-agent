@@ -41,6 +41,48 @@ MCP Python SDK 固定 `<2`，暂不采用仍在迁移期的 v2。
 LangChain 只提供 `BaseChatModel → ModelPort` 和 `BaseTool → ToolPort` 兼容层，
 不把 LangChain Agent/Chain 运行时放进内核。LangGraph 留到 M5 的复杂工作流评测。
 
+## M2：恢复、审批与 Eval
+
+M1 真实链路现在会在 `runs/` 写入原子 checkpoint。启用逐工具 CLI 审批：
+
+```powershell
+.tools\uv\Scripts\uv.exe run python examples/run_demo.py --m1 --hitl
+```
+
+若在审批提示或工具执行期间中断，事件流中的 `run_id` 可用于恢复：
+
+```powershell
+.tools\uv\Scripts\uv.exe run python examples/run_demo.py --m1 --resume RUN_ID --hitl
+```
+
+恢复不会重复添加用户消息；待审批工具会先重新审批。工具执行采用 at-least-once：
+若外部工具已完成但结果尚未 checkpoint，恢复可能再次调用，因此自动重试只对只读工具开放。
+
+运行不需要密钥或网络的回归门禁：
+
+```powershell
+.venv\Scripts\python.exe tests\test_smoke.py
+.venv\Scripts\python.exe evals\run_eval.py --mode offline
+```
+
+生成真实 DeepSeek 基线：
+
+```powershell
+.venv\Scripts\python.exe evals\run_eval.py --mode deepseek --output evals/baseline-m2.json
+```
+
+离线 eval 必须通过 `10/10`；真实 DeepSeek 基线至少通过 `8/10`。CI 只运行离线门禁，
+不会读取模型密钥或启动 MCP server。
+
+M2 基线（2026-07-27）：
+
+| 模式 | 模型 | 通过率 | 平均步数 |
+|---|---|---:|---:|
+| 离线门禁 | FakeScriptedModel | 10/10 | 2.1 |
+| 真实链路 | deepseek/deepseek-chat | 8/10 | 2.1 |
+
+真实逐题结果见 [evals/baseline-m2.json](evals/baseline-m2.json)。
+
 完整规划见 [PLAN.md](PLAN.md)。
 
 ## 扩展纪律

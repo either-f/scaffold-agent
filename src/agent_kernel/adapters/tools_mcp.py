@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from concurrent.futures import Future
+from datetime import timedelta
 from typing import Any
 
 from ..ports import ToolPort
@@ -33,12 +34,26 @@ class McpToolbox(ToolPort):
         servers: Mapping[str, StdioServerConfig],
         allow: set[str] | None = None,
         guards: Mapping[str, Guard] | None = None,
+        request_timeout_seconds: float = 30,
+        retryable: set[str] | None = None,
+        max_retries: int = 0,
+        retry_delay_seconds: float = 1,
     ) -> None:
         if not servers:
             raise ValueError("至少需要一个 MCP server")
         self.servers = dict(servers)
         self.allow = frozenset(allow or ())
         self.guards = dict(guards or {})
+        if request_timeout_seconds <= 0:
+            raise ValueError("request_timeout_seconds 必须大于 0")
+        if max_retries < 0 or retry_delay_seconds < 0:
+            raise ValueError("重试次数和等待时间不能为负数")
+        self.request_timeout_seconds = request_timeout_seconds
+        self.retryable = frozenset(retryable or ())
+        if unknown_retryable := self.retryable - self.allow:
+            raise ValueError(f"retryable 包含未授权工具: {', '.join(sorted(unknown_retryable))}")
+        self.max_retries = max_retries
+        self.retry_delay_seconds = retry_delay_seconds
         self._requests: queue.Queue[tuple[str, Any, Future | None]] = queue.Queue()
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
@@ -115,7 +130,9 @@ class McpToolbox(ToolPort):
                     env={**os.environ, **config.env},
                 )
                 read, write = await stack.enter_async_context(stdio_client(params))
-                session = await stack.enter_async_context(ClientSession(read, write))
+                session = await stack.enter_async_context(
+                    ClientSession(read, write, read_timeout_seconds=timedelta(seconds=self.request_timeout_seconds))
+                )
                 await session.initialize()
                 sessions[server_name] = session
                 response = await session.list_tools()
@@ -143,7 +160,14 @@ class McpToolbox(ToolPort):
                 try:
                     name, args = payload
                     server_name, remote_name = self._remote_names[name]
-                    result = await sessions[server_name].call_tool(remote_name, arguments=args)
+                    for attempt in range(self.max_retries + 1):
+                        try:
+                            result = await sessions[server_name].call_tool(remote_name, arguments=args)
+                            break
+                        except Exception:
+                            if name not in self.retryable or attempt >= self.max_retries:
+                                raise
+                            await asyncio.sleep(self.retry_delay_seconds)
                     assert future is not None
                     future.set_result(self._result_text(result))
                 except BaseException as exc:

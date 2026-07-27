@@ -57,6 +57,7 @@ class RunState:
     step: int = 0
     status: str = "running"  # running | done | failed | paused
     answer: str | None = None
+    pending_tool: ToolCall | None = None
 
     def add(self, role: str, content: str, name: str | None = None) -> None:
         self.messages.append(Message(role, content, name))
@@ -66,7 +67,10 @@ class RunState:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "RunState":
-        msgs = [Message(**m) for m in d.pop("messages", [])]
-        state = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__ and k != "messages"})
+        raw = dict(d)
+        msgs = [Message(**m) for m in raw.pop("messages", [])]
+        pending = raw.pop("pending_tool", None)
+        state = cls(**{k: v for k, v in raw.items() if k in cls.__dataclass_fields__})
         state.messages = msgs
+        state.pending_tool = ToolCall(**pending) if pending else None
         return state
