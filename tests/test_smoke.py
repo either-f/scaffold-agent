@@ -12,6 +12,7 @@ from agent_kernel.adapters.tools_local import LocalToolbox, default_toolbox
 from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
+from agent_kernel.ports import MemoryPort
 from agent_kernel.types import RunState, ToolCall
 
 SCRIPT = [
@@ -131,9 +132,44 @@ def test_resume_guards_and_pending_at_step_limit():
     assert result.pending_tool is None and result.status == "failed"
 
 
+def test_planner_retrieves_by_latest_user_message():
+    class RecordingMemory(MemoryPort):
+        def __init__(self):
+            self.query = None
+            self.k = None
+
+        def add(self, run_id, role, content):
+            pass
+
+        def search(self, query, k=5):
+            self.query, self.k = query, k
+            return ["最新问题", "本轮已有内容", "跨会话记忆"]
+
+    class RecordingModel(FakeScriptedModel):
+        def complete(self, messages, tools):
+            self.messages = messages
+            return super().complete(messages, tools)
+
+    state = RunState()
+    state.add("user", "旧问题")
+    state.add("tool", "工具结果", "demo")
+    state.add("assistant", "本轮已有内容")
+    state.add("user", "最新问题")
+    memory = RecordingMemory()
+    model = RecordingModel(['{"thought": "t", "final": "ok"}'])
+
+    ReactPlanner().step(state, model, default_toolbox(), memory)
+
+    assert (memory.query, memory.k) == ("最新问题", 8)
+    assert "相关记忆：\n- 跨会话记忆" in model.messages[0].content
+    assert "- 最新问题" not in model.messages[0].content
+    assert "- 本轮已有内容" not in model.messages[0].content
+
+
 if __name__ == "__main__":
     test_kernel_loop_and_checkpoint()
     test_hitl_veto()
     test_resume_pending_approval()
     test_resume_guards_and_pending_at_step_limit()
+    test_planner_retrieves_by_latest_user_message()
     print("OK: 全部冒烟测试通过")
