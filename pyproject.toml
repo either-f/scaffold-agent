@@ -1,0 +1,20 @@
+[project]
+name = "agent-kernel"
+version = "0.1.0"
+description = "微内核 + 插件端口的通用 agent 框架（内核零第三方依赖）"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+model = ["litellm>=1.93,<2"]
+mcp = ["mcp>=1.28,<2", "mcp-server-fetch==2026.7.10"]
+langchain = ["langchain-core>=1.4,<2"]
+obs = ["opentelemetry-sdk", "langfuse"]
+eval = ["deepeval"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
