@@ -1,8 +1,11 @@
-"""Demo 1: 委托式研究助手 — 技能发现、正文加载、多步工具调用。"""
+r"""Demo 1: 委托式研究助手 --- 父 kernel 通过 WorkerDelegationPort 委派给研究 worker。
+
+研究 worker 使用真正的 SkillToolbox + DirSkillLoader 加载 web-research 技能并调用本地工具。
+父 kernel 只暴露 `worker_research` 工具，通过 WorkerDelegationPort 委托执行。
+"""
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -11,51 +14,61 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from agent_kernel.adapters.memory_sqlite import SqliteMemory
 from agent_kernel.adapters.model_fake import FakeScriptedModel
-from agent_kernel.adapters.tools_local import LocalToolbox
+from agent_kernel.adapters.tools_agents import WorkerDelegationPort
+from agent_kernel.adapters.tools_local import LocalToolbox, safe_calc
 from agent_kernel.adapters.tools_skills import SkillToolbox
 from agent_kernel.events import EventBus
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.skills.loader import DirSkillLoader
+from agent_kernel.types import RunState
 
-STEPS = [
-    '{"thought": "先看看有什么可用技能", "tool": "load_skill", "args": {"name": "web-research"}}',
-    '{"thought": "已加载 web-research 技能指南：拆解→检索→交叉验证→结论。现在需要获取时间，再基于技能指导做模拟计算。", "tool": "now", "args": {}}',
-    '{"thought": "已获得当前时间，现在用 calc 模拟数据分析，完成研究闭环。", "tool": "calc", "args": {"expression": "3.14159*7.5*7.5"}}',
-    '{"thought": "研究完成：已按 web-research 技能流程操作，获得技能注册为\\"cross-validated\\"标记。", "final": "研究任务完成：加载 web-research 技能后执行\\"拆解→检索→交叉验证→结论\\"四步流程。当前时间见工具结果；数值分析结果：3.14159*7.5² = 176.71。研究数据已交叉验证。"}',
+PARENT_STEPS = [
+    json.dumps({"thought": "委托研究 worker 分析圆形面积计算", "tool": "worker_research", "args": {"task": "调研圆形面积计算的最佳实践"}}),
+    json.dumps({"thought": "worker 返回了研究结果", "final": "委派任务完成：worker 报告圆形面积 pi*r^2，r=7.5~176.71"}),
 ]
 
-
-def event_bus() -> EventBus:
-    bus = EventBus()
-    bus.subscribe("*", lambda e: print(f"[event] {e.type:14s} {e.payload}"))
-    return bus
+WORKER_STEPS = [
+    json.dumps({"thought": "先加载 web-research 技能了解研究方法", "tool": "load_skill", "args": {"name": "web-research"}}),
+    json.dumps({"thought": "按技能规范拆解问题，计算圆形面积", "tool": "calc", "args": {"expression": "3.14159*7.5*7.5"}}),
+    json.dumps({"thought": "研究完成：拆解→计算→结论", "final": "研究结果：圆形面积=pi*r^2，r=7.5 时面积≈176.71"}),
+]
 
 
 def main() -> int:
     loader = DirSkillLoader(str(PROJECT_ROOT / "skills_library"))
-    inner = LocalToolbox()
-    inner.register("now", "获取当前日期时间", lambda: __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-    inner.register(
-        "calc", "计算一个四则运算表达式",
-        lambda expression: str(eval(expression, {"__builtins__": {}}, {})),
-    )
+    worker_inner = LocalToolbox()
+    worker_inner.register("calc", "计算四则运算表达式", lambda expression: safe_calc(expression))
+    worker_tools = SkillToolbox(worker_inner, loader)
 
-    kernel = AgentKernel(
-        model=FakeScriptedModel(STEPS),
-        tools=SkillToolbox(inner, loader),
+    worker = AgentKernel(
+        model=FakeScriptedModel(list(WORKER_STEPS)),
+        tools=worker_tools,
         planner=ReactPlanner(),
         memory=SqliteMemory(),
-        bus=event_bus(),
+        bus=EventBus(),
         max_steps=6,
+    )
+
+    parent_inner = LocalToolbox()
+    delegation = WorkerDelegationPort(parent_inner)
+    delegation.register("research", worker, "将研究任务委派给 research worker")
+
+    parent = AgentKernel(
+        model=FakeScriptedModel(list(PARENT_STEPS)),
+        tools=delegation,
+        planner=ReactPlanner(),
+        memory=SqliteMemory(),
+        bus=EventBus(),
+        max_steps=4,
     )
 
     available = [s.name for s in loader.list_skills()]
     print(f"可用技能: {available}")
-    print(f"可用工具: {[s.name for s in kernel.tools.list_tools()]}")
+    print(f"父 kernel 工具: {[s.name for s in parent.tools.list_tools()]}")
     print()
 
-    state = kernel.run("请调研分析：当前时间下，圆形面积计算的最佳实践是什么？使用可用的技能和工具来完成。")
+    state = parent.run("请委托研究 worker 调研分析圆形面积计算", state=RunState(run_id="demo-research-0001"))
 
     print()
     print(f"状态: {state.status}, 步数: {state.step}")

@@ -165,17 +165,17 @@ M5 策略离线基线：
 
 | 策略 | 通过率 | 平均步数 | 备注 |
 |------|:---:|:---:|------|
-| ReAct | 3/3 | 2.00 | JSON 动作协议，无计划开销 |
+| ReAct | 3/3 | 2.33 | JSON 动作协议，无计划开销 |
 | Plan-Execute | 3/3 | 2.00 | 首步额外生成计划 |
 | CodeAct | 3/3 | 2.00 | 沙箱执行，安全隔离 |
-| LangGraph | 3/3 | 2.33 | 图适配，含 HITL 形模拟 |
+| LangGraph | 3/3 | 1.67 | 图适配，含 HITL 形模拟 |
 
 完整报告见 [evals/baseline-m5.json](evals/baseline-m5.json)。
 
 ## M6：多 Agent 与互操作
 
-Worker 委派通过 `WorkerDelegationToolbox` 实现 orchestrator-worker 模式；
-A2A 互操作通过 `A2AServer` 暴露 Agent Card 与 HTTP task handler；
+Worker 委派通过 `WorkerDelegationPort` 实现 orchestrator-worker 模式；
+A2A 互操作通过 `A2AInteropAdapter` + `create_a2a_server` 暴露 Agent Card 与 HTTP task handler；
 图状记忆 adapter 以实体-关系-实体三元组验证 MemoryPort 抽象不需改内核即可扩展到图数据库范式。
 
 ```powershell
@@ -216,10 +216,18 @@ A2A 互操作通过 `A2AServer` 暴露 Agent Card 与 HTTP task handler；
 | M1 | DeepSeek + MCP + LangChain | ✅ | 真实模型链路 |
 | M2 | 恢复、审批与 Eval | ✅ | 离线 10/10，真模型 9/10 |
 | M3 | 语义记忆 + 有界上下文 | ✅ | 语义检索 5/5，50 轮上下文 |
-| M4 | Skill 与沙箱 | ✅ | 渐进披露 + Docker 隔离 |
+| M4 | Skill 与沙箱 | ✅ | 渐进披露 + Docker 命令安全构建（离线验证） |
 | M5 | 观测与策略对比 | ✅ | 4 策略 12/12 |
 | M6 | 多 Agent 与互操作 | ✅ | Worker + A2A + 图记忆 |
 | M7 | 打包与求职物料 | ✅ | 3 个 demo + .cast + 简历 |
+
+### 坦诚声明
+
+- **沙箱**：Docker 命令/安全构建已测试；离线 demo 通过注入 runner 验证参数结构，未提供真实容器隔离证明。
+- **观测**：OTel/Langfuse 导出器经 fake exporter 单元测试，无 self-host Langfuse 实时重放证据。
+- **LangGraph**：策略通过注入假图集成验证，未编译真实 StateGraph。
+- **A2A**：`A2AInteropAdapter` + `create_a2a_server` 为标准库 `http.server` 实现，非官方/完整 A2A SDK。
+- **Worker 委派**：真实进程内 AgentKernel 调用，但 demo 模型为 FakeScriptedModel，非生产 LLM。
 
 完整规划见 [PLAN.md](PLAN.md)。
 

@@ -1,8 +1,11 @@
-"""Demo 2: 安全文件整理与技能发现 — 本地工具链 + 渐进式技能披露。"""
+r"""Demo 2: 安全文件审查 --- 真实本地工具 + 渐进式技能披露。
+
+模型通过真正的 `list_dir` 工具读取临时目录中的文件名与大小，
+基于工具返回的真实数据给出整理建议（只读审查，不修改文件）。
+"""
 from __future__ import annotations
 
 import json
-import os
 import sys
 import tempfile
 from pathlib import Path
@@ -21,22 +24,16 @@ from agent_kernel.skills.loader import DirSkillLoader
 
 SKILL_MD = """---
 name: file-ops
-description: 安全文件组织、分类与批量重命名
+description: 安全文件审查、分类与整理建议
 ---
 
 # File Operations Skill
 
 ## 流程
-1. 列出目标目录文件清单，按扩展名分组。
-2. 对每组文件计算数量与总大小。
-3. 输出组织结构建议（如按日期/类型分文件夹）。
+1. 使用 list_dir 工具列出目标目录中所有文件的名称与大小。
+2. 按扩展名分组，统计每组文件数与总大小。
+3. 输出只读审查结果：按类型分类建议（不修改任何文件）。
 """
-
-
-def event_bus() -> EventBus:
-    bus = EventBus()
-    bus.subscribe("*", lambda e: print(f"[event] {e.type:14s} {e.payload}"))
-    return bus
 
 
 def main() -> int:
@@ -51,34 +48,64 @@ def main() -> int:
         for name, size in [("report.txt", 150), ("data.csv", 420), ("notes.md", 80)]:
             (test_dir / name).write_text("x" * size)
 
+        allowed_root = test_dir.resolve()
+
+        def list_dir(dir_path: str) -> str:
+            """列出目录中所有文件及其大小（只读，不修改任何文件）。"""
+            resolved = Path(dir_path).resolve()
+            if not resolved.is_relative_to(allowed_root):
+                raise PermissionError(f"拒绝访问: {dir_path} (路径不在允许范围内)")
+            if not resolved.is_dir():
+                return f"错误: {dir_path} 不是有效目录"
+            entries = []
+            total = 0
+            for child in sorted(resolved.iterdir()):
+                if child.is_file():
+                    sz = child.stat().st_size
+                    entries.append(f"{child.name}: {sz} bytes")
+                    total += sz
+            entries.append(f"--- 总计 {len(entries)-1} 个文件, {total} bytes ---")
+            return "\n".join(entries)
+
         loader = DirSkillLoader(str(skills_root))
         inner = LocalToolbox()
-        inner.register("now", "获取当前日期时间", lambda: __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        inner.register("calc", "计算表达式", lambda expression: str(eval(expression, {"__builtins__": {}}, {})))
+        inner.register(
+            "list_dir", "列出目录中所有文件的名称与大小（只读，不修改文件）",
+            list_dir,
+            parameters={"type": "object", "properties": {"dir_path": {"type": "string"}}, "required": ["dir_path"]},
+        )
 
         STEPS = [
-            '{"thought": "先发现可用技能，看看文件操作技能是否可用", "tool": "load_skill", "args": {"name": "file-ops"}}',
-            '{"thought": "技能加载完成，需要获取时间戳标记文件组织时间", "tool": "now", "args": {}}',
-            '{"thought": "现在模拟文件组织：计算3个文件(420+150+80)的总大小", "tool": "calc", "args": {"expression": "420+150+80"}}',
-            '{"thought": "文件整理完成：3个文件共650字节，按扩展名分为 txt/csv/md 三组。已加载 file-ops 技能流程。", "final": "文件整理完成。目录 project_files 包含 3 个文件，总大小 650 字节。按扩展名分为 txt/report.txt、csv/data.csv、md/notes.md 三组。建议按类型创建子文件夹归档。技能 file-ops 已加载并应用。"}',
+            json.dumps({"thought": "先加载 file-ops 技能了解审查流程", "tool": "load_skill", "args": {"name": "file-ops"}}),
+            json.dumps({"thought": "按技能规范第一步：列出目标目录文件", "tool": "list_dir", "args": {"dir_path": str(test_dir)}}),
+            json.dumps({"thought": "基于工具返回的真实数据给出分类建议", "final": "文件审查完成（只读，未修改任何文件）。目录包含 3 个文件共 650 bytes。按扩展名分类建议：txt/report.txt、csv/data.csv、md/notes.md 各放一个子文件夹。"}),
         ]
 
         kernel = AgentKernel(
-            model=FakeScriptedModel(STEPS),
+            model=FakeScriptedModel(list(STEPS)),
             tools=SkillToolbox(inner, loader),
             planner=ReactPlanner(),
             memory=SqliteMemory(),
-            bus=event_bus(),
+            bus=EventBus(),
             max_steps=6,
         )
 
-        print(f"可用技能: {[s.name for s in loader.list_skills()]}")
+        available = [s.name for s in loader.list_skills()]
+        print(f"可用技能: {available}")
         print(f"可用工具: {[s.name for s in kernel.tools.list_tools()]}")
         print()
 
+        # 负向自检：尝试越权访问根外路径应触发 PermissionError
+        try:
+            escaped = Path(tmp).parent.resolve()
+            inner.call("list_dir", {"dir_path": str(escaped)})
+            print("FAIL: list_dir 未拒绝越权路径", file=sys.stderr)
+            return 1
+        except PermissionError:
+            pass
+
         state = kernel.run(
-            f"请整理项目文件：目录 {test_dir} 中包含 txt/csv/md 文件，"
-            f"先发现可用技能，再按技能规范组织文件，最后报告整理结果。"
+            "请审查项目文件目录，先发现可用技能，再按技能规范使用 list_dir 工具审查文件，最后报告结果。"
         )
 
         print()

@@ -23,16 +23,4 @@ jobs:
       - run: python examples/record_demos.py --check
       - run: python -m compileall -q src examples evals tests
       - name: "kernel: no third-party imports"
-        run: >
-          python -c "
-          import ast,sys,pathlib;root=pathlib.Path('src/agent_kernel');fail=0
-          for f in root.rglob('*.py'):
-            if 'adapters' in str(f) or 'planners' in str(f): continue
-            tree=ast.parse(f.read_text())
-            for n in ast.walk(tree):
-              if isinstance(n,(ast.Import,ast.ImportFrom)) and n.module:
-                mod=n.module.split('.')[0]
-                if mod not in {'_future_','__future__','abc','ast','base64','collections','contextlib','copy','dataclasses','datetime','decimal','enum','fractions','functools','hashlib','html','http','importlib','inspect','io','itertools','json','logging','math','operator','os','pathlib','platform','pprint','queue','random','re','shutil','signal','socket','sqlite3','statistics','string','struct','subprocess','sys','tempfile','textwrap','threading','time','traceback','typing','unittest','urllib','uuid','warnings','weakref','xml','zipfile'}:
-                  print(f'THIRD-PARTY IMPORT: {f} imports {n.module}',file=sys.stderr);fail+=1
-          sys.exit(min(fail,1))
-          "
+        run: python evals/check_core_imports.py
