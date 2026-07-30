@@ -1,0 +1,118 @@
+{
+  "generated_at": "2026-07-29T09:57:34.689777+00:00",
+  "mode": "offline",
+  "model": "fake-scripted",
+  "strategies": [
+    {
+      "strategy": "react",
+      "passed": 3,
+      "total": 3,
+      "average_steps": 2.33,
+      "complexity": "ReAct：单步思考-动作循环，JSON 协议解析，无计划开销，步数等于工具调用+final。",
+      "results": [
+        {
+          "name": "arithmetic-single-step",
+          "passed": true,
+          "steps": 2,
+          "answer": "结果是 49"
+        },
+        {
+          "name": "tool-selection-now",
+          "passed": true,
+          "steps": 2,
+          "answer": "当前时间见工具结果。"
+        },
+        {
+          "name": "multi-step-calc",
+          "passed": true,
+          "steps": 3,
+          "answer": "2+3=5，5*4=20，最终结果是 20。"
+        }
+      ]
+    },
+    {
+      "strategy": "plan_execute",
+      "passed": 3,
+      "total": 3,
+      "average_steps": 2.0,
+      "complexity": "Plan-Execute：首步额外生成计划并存入上下文，后续步骤复用 ReAct；计划不增加工具调用但增加 prompt 长度。",
+      "results": [
+        {
+          "name": "arithmetic-with-plan",
+          "passed": true,
+          "steps": 2,
+          "answer": "结果是 49"
+        },
+        {
+          "name": "plan-then-execute",
+          "passed": true,
+          "steps": 2,
+          "answer": "6*7 的结果是 42。"
+        },
+        {
+          "name": "plan-empty-fallback",
+          "passed": true,
+          "steps": 2,
+          "answer": "10-3 的结果是 7。"
+        }
+      ]
+    },
+    {
+      "strategy": "codeact",
+      "passed": 3,
+      "total": 3,
+      "average_steps": 2.0,
+      "complexity": "CodeAct：模型写 Python 代码经 Docker 沙箱执行，指令模板替换为 python_execute；沙箱安全隔离无网络无挂载。",
+      "results": [
+        {
+          "name": "codeact-arithmetic",
+          "passed": true,
+          "steps": 2,
+          "answer": "结果是 49"
+        },
+        {
+          "name": "codeact-list-comprehension",
+          "passed": true,
+          "steps": 2,
+          "answer": "1 到 5 的平方和是 55。"
+        },
+        {
+          "name": "codeact-string-manipulation",
+          "passed": true,
+          "steps": 2,
+          "answer": "反转后是 dlrow olleh。"
+        }
+      ]
+    },
+    {
+      "strategy": "langgraph",
+      "passed": 3,
+      "total": 3,
+      "average_steps": 1.67,
+      "complexity": "LangGraph：注入外部编译图，翻译图输出为 ToolCall/FinalAnswer；HITL 形态以工具分支模拟审批后执行。",
+      "results": [
+        {
+          "name": "langgraph-final-branch",
+          "passed": true,
+          "steps": 1,
+          "answer": "图给出的答案"
+        },
+        {
+          "name": "langgraph-tool-branch",
+          "passed": true,
+          "steps": 2,
+          "answer": "40"
+        },
+        {
+          "name": "langgraph-hitl-shaped",
+          "passed": true,
+          "steps": 2,
+          "answer": "144，审批已通过。"
+        }
+      ]
+    }
+  ],
+  "overall_passed": 12,
+  "overall_total": 12,
+  "ok": true
+}

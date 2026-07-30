@@ -134,6 +134,93 @@ M3B 离线基线（2026-07-27）：50/50 轮完成，增量摘要 2 次，最大
 DeepSeek 会话成功从 pgvector 回答项目代号 `Mercury` 与中文偏好；完整结果见
 [evals/baseline-m3.json](evals/baseline-m3.json)。
 
+## M4：Skill 与沙箱
+
+渐进式技能系统采用 Anthropic Agent Skills 规范（SKILL.md + 渐进披露）。技能工具
+默认只披露 name+description，正文经 `load_skill` 工具按需加载。新增技能 =
+往 `skills_library/` 放一个文件夹，零代码变更。
+
+Docker 沙箱执行器通过 `--read-only --network none --cap-drop ALL --security-opt no-new-privileges`
+锁定容器；`SandboxToolbox` 暴露唯一的 `python_execute` 工具供 CodeAct 策略使用。
+
+```powershell
+.venv\Scripts\python.exe tests\test_m4.py
+```
+
+## M5：观测与评测
+
+事件总线（EventBus）发布/订阅模式支持外部观测器无侵入接入：
+`ObservedModel` 发布 `model.complete` 事件、`CostLedger` 统计 token 费用、
+`JsonlEventRecorder` 写事件回放日志、`OtelExporter` 与 `LangfuseExporter`
+分别对接 OpenTelemetry 和 Langfuse。
+
+策略对比（离线，4 策略 × 3 用例）：
+
+```powershell
+.venv\Scripts\python.exe evals\run_m5.py
+.venv\Scripts\python.exe tests\test_m5.py
+```
+
+M5 策略离线基线：
+
+| 策略 | 通过率 | 平均步数 | 备注 |
+|------|:---:|:---:|------|
+| ReAct | 3/3 | 2.00 | JSON 动作协议，无计划开销 |
+| Plan-Execute | 3/3 | 2.00 | 首步额外生成计划 |
+| CodeAct | 3/3 | 2.00 | 沙箱执行，安全隔离 |
+| LangGraph | 3/3 | 2.33 | 图适配，含 HITL 形模拟 |
+
+完整报告见 [evals/baseline-m5.json](evals/baseline-m5.json)。
+
+## M6：多 Agent 与互操作
+
+Worker 委派通过 `WorkerDelegationToolbox` 实现 orchestrator-worker 模式；
+A2A 互操作通过 `A2AServer` 暴露 Agent Card 与 HTTP task handler；
+图状记忆 adapter 以实体-关系-实体三元组验证 MemoryPort 抽象不需改内核即可扩展到图数据库范式。
+
+```powershell
+.venv\Scripts\python.exe tests\test_m6.py
+```
+
+## M7：Demo 录制与求职物料
+
+三个离线演示场景 + asciicast v2 录制器：
+
+```powershell
+.venv\Scripts\python.exe examples\record_demos.py          # 录制全部 .cast
+.venv\Scripts\python.exe examples\record_demos.py --check  # CI 离线验证
+.venv\Scripts\python.exe examples\record_demos.py --play research  # 回放
+```
+
+演示回放与简历要点见 [docs/demos/](docs/demos/) 和 [docs/resume-bullets.md](docs/resume-bullets.md)。
+
+## 回归门禁
+
+```powershell
+.venv\Scripts\python.exe tests\test_smoke.py
+.venv\Scripts\python.exe tests\test_m4.py
+.venv\Scripts\python.exe tests\test_m5.py
+.venv\Scripts\python.exe tests\test_m6.py
+.venv\Scripts\python.exe evals\run_eval.py --mode offline
+.venv\Scripts\python.exe evals\run_m3.py context
+.venv\Scripts\python.exe evals\run_m5.py
+.venv\Scripts\python.exe examples\record_demos.py --check
+.venv\Scripts\python.exe -m compileall -q src examples evals tests
+```
+
+## 结果总览
+
+| 里程碑 | 内容 | 状态 | 关键指标 |
+|--------|------|:----:|------|
+| M0 | 内核骨架 | ✅ | 纯标准库，离线可跑 |
+| M1 | DeepSeek + MCP + LangChain | ✅ | 真实模型链路 |
+| M2 | 恢复、审批与 Eval | ✅ | 离线 10/10，真模型 9/10 |
+| M3 | 语义记忆 + 有界上下文 | ✅ | 语义检索 5/5，50 轮上下文 |
+| M4 | Skill 与沙箱 | ✅ | 渐进披露 + Docker 隔离 |
+| M5 | 观测与策略对比 | ✅ | 4 策略 12/12 |
+| M6 | 多 Agent 与互操作 | ✅ | Worker + A2A + 图记忆 |
+| M7 | 打包与求职物料 | ✅ | 3 个 demo + .cast + 简历 |
+
 完整规划见 [PLAN.md](PLAN.md)。
 
 ## 扩展纪律

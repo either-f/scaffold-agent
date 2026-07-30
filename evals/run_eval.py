@@ -65,14 +65,19 @@ def run_task(task: dict, model, tools: ToolPort) -> dict:
             max_steps=int(task["max_steps"]),
         ).run(task["input"].replace("{ROOT}", PROJECT_ROOT.as_posix()))
         answer = state.answer or ""
+        expect_error = task.get("expect_tool_error", False)
         successful = {call["name"] for call in calls if call["ok"]}
+        called = {call["name"] for call in calls}
         reasons = []
         if state.status != "done":
             reasons.append(f"status={state.status}")
-        missing = set(task["required_tools"]) - successful
+        if expect_error:
+            missing = set(task["required_tools"]) - called
+        else:
+            missing = set(task["required_tools"]) - successful
         if missing:
             reasons.append(f"missing_tools={sorted(missing)}")
-        if any(not call["ok"] for call in calls):
+        if not expect_error and any(not call["ok"] for call in calls):
             reasons.append("tool_error")
         missing_text = [text for text in task["answer_contains"] if text.casefold() not in answer.casefold()]
         if missing_text:
@@ -129,8 +134,8 @@ def main() -> int:
     args = parser.parse_args()
 
     tasks = load_tasks()
-    if len(tasks) != 10:
-        raise RuntimeError(f"M2 eval 必须恰好包含 10 条任务，当前为 {len(tasks)}")
+    if len(tasks) < 10:
+        raise RuntimeError(f"eval 至少需要 10 条任务，当前为 {len(tasks)}")
     results = offline_results(tasks) if args.mode == "offline" else deepseek_results(tasks)
     passed = sum(result["passed"] for result in results)
     report = {
@@ -152,7 +157,7 @@ def main() -> int:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"结果已写入 {output}")
-    threshold = 10 if args.mode == "offline" else 8
+    threshold = len(tasks) if args.mode == "offline" else max(8, int(len(tasks) * 0.8))
     return 0 if passed >= threshold else 1
 
 

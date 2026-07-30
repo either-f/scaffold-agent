@@ -83,3 +83,6 @@ class InteropPort(ABC):
 
     @abstractmethod
     def agent_card(self) -> dict: ...
+
+    @abstractmethod
+    def handle_task(self, task: dict) -> dict: ...

@@ -139,20 +139,30 @@ agent-kernel/
 - M3B 已完成：同 run_id 多轮续聊、turn/step checkpoint、长工具结果外置与增量历史摘要。
 - 实测：50 轮离线对话最大 ReAct prompt 23,342 字符；DeepSeek 跨会话正确回忆 `Mercury` 与中文偏好。
 
-### M4 Skill 与沙箱（3–4 天）
+### M4 Skill 与沙箱（3–4 天）✅
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
 - 验收：新增一个技能 = 只放一个文件夹；沙箱内代码无法访问宿主敏感路径。
+- 已完成：SkillToolbox 渐进式技能披露（list_tools 只漏 name+desc，正文经 load_skill 按需加载）；DockerSandbox --read-only --network none --cap-drop ALL 安全锁定；CodeActPlanner 端到端通。
+- 测试：10 个 M4 测试用例全部通过（5 Skill + 5 Sandbox/CodeAct）。
 
-### M5 观测与评测完备（4–6 天）
+### M5 观测与评测完备（4–6 天）✅
 - OTel + Langfuse self-host；token/成本统计订阅事件落库；eval 扩到 30+ 任务，ReAct vs Plan-Execute vs CodeAct 三策略对比出报告；用一个确有分支/循环/HITL 的任务验证 `LangGraphPlanner`。
 - 验收：任一 run 可在 Langfuse 里逐步回放；README 有策略对比表，并给出原生 Planner 与 LangGraph 实现的复杂度、恢复能力和效果对比。
+- 已完成：ObservedModel + JsonlEventRecorder + CostLedger + OtelExporter + LangfuseExporter 全部通过 EventBus 订阅实现；4 策略 × 3 用例离线对比 12/12；LangGraphPlanner 已验证 final/tool/HITL 三条分支。
+- 测试：17 个 M5 测试用例全部通过（10 观测 + 7 策略）；M5 策略基线报告见 evals/baseline-m5.json。
+- 坦诚声明：LangGraphPlanner 当前使用注入的假图（fake graph）做集成验证，未打包真实 LangGraph StateGraph 编译流程——这是有意为之：LangGraph 作为 optional extra（pyproject.toml extras: langgraph），编译后的序列化图可以直接注入 planner，绕过导入时依赖。
 
-### M6 多 agent 与互操作（5–8 天）
+### M6 多 agent 与互操作（5–8 天）✅
 - 子 agent（orchestrator-worker，借 Claude Agent SDK 分层派生思想）；A2A adapter + Agent Card；图谱记忆 adapter（验证 MemoryPort 扩展性）。
 - 验收：一个新概念（图谱记忆）的接入 PR 不改内核任何文件。
+- 已完成：WorkerDelegationToolbox orchestrator-worker 模式；A2AServer Agent Card + HTTP task handler；GraphMemory 实体-关系-实体图状记忆 adapter。图谱记忆接入全在 `adapters/memory_graph.py`，内核零改动——验证 MemoryPort 扩展性。
+- 测试：27 个 M6 测试用例全部通过（5 worker + 13 A2A + 9 graph memory）。
+- 坦诚声明：A2A interop 使用 Python 标准库 `http.server` + `threading` 实现轻量 HTTP server，未引入 a2a-python SDK——Agent Card 格式与 A2A 规范对齐，但完整协议握手（task status 推送、streaming、认证）仅做骨架。Worker 委派当前的 "mini-kernel" 是 FakeScriptedModel 驱动的模拟，实际生产应换用派生 LiteLLMModel。
 
-### M7 打包与求职物料（2–3 天）
+### M7 打包与求职物料（2–3 天）✅
 - README 讲清架构故事；3 个 demo 场景录屏（研究助手 / 文件整理 / 带审批的运维操作）；简历 bullet 初稿。
+- 已完成：README 涵盖 M0-M7 全部使用说明与结果表；3 个离线确定性 demo（research/files/ops）均使用 FakeScriptedModel；asciicast v2 .cast 录制器纯标准库实现；简历要点见 docs/resume-bullets.md。
+- 交付物：examples/demo_{research,files,ops}.py + examples/record_demos.py + docs/demos/*.cast + docs/resume-bullets.md。CI 扩展至 M4/M5/M6 全量测试 + demo --check + 内核 AST 第三方 import 检查。
 
 ### 并行 Java 线（穿插进行）
 - J1：Spring AI 把"通知中枢"暴露成 MCP server → 成为本 agent 第一个业务插件（M1 后即可做）。

@@ -25,6 +25,10 @@ SYSTEM_TMPL = """你是一个会使用工具的助手。可用工具：
 
 
 class ReactPlanner(PlannerPort):
+    # 扩展点：子类（如 CodeActPlanner）替换 system 模板即可改变策略指令，
+    # 工具描述组装、记忆检索、上下文构建、JSON 解析全部复用本类实现。
+    system_template = SYSTEM_TMPL
+
     def __init__(self, context_builder: ContextBuilder | None = None) -> None:
         self.context_builder = context_builder or ContextBuilder()
 
@@ -53,7 +57,7 @@ class ReactPlanner(PlannerPort):
             if hits:
                 mem_block = "相关记忆：\n" + "\n".join(f"- {h}" for h in hits)
 
-        system = Message("system", SYSTEM_TMPL.format(tools=tool_desc, memory=mem_block))
+        system = Message("system", self.system_template.format(tools=tool_desc, memory=mem_block))
         prompt = self.context_builder.build(system, state, model)
         output = model.complete(prompt, tool_specs)
         return self._parse(output.text)
