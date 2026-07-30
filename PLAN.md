@@ -155,6 +155,7 @@ agent-kernel/
 - 子 agent（orchestrator-worker，借 Claude Agent SDK 分层派生思想）；A2A adapter + Agent Card；图谱记忆 adapter（验证 MemoryPort 扩展性）。
 - 验收：一个新概念（图谱记忆）的接入 PR 不改内核任何文件。
 - 已完成：WorkerDelegationPort orchestrator-worker 模式；A2AInteropAdapter + create_a2a_server 提供 Agent Card 与 HTTP task handler；GraphMemory 实体-关系-实体图状记忆 adapter。图谱记忆接入全在 `adapters/memory_graph.py`，内核零改动——验证 MemoryPort 扩展性。
+- 生产推进（2026-07-30）：新增 `Neo4jGraphMemory`（`adapters/memory_graph_neo4j.py`），真实 Neo4j + Cypher 存查三元组，取代 SQLite 版本作为生产 adapter；`GraphMemory` 降级为离线 Fake。详见 [ADR-0006](docs/adr/0006-graph-memory-neo4j.md) 与 `evals/run_graph.py`。
 - 坦诚声明：A2A interop 使用 Python 标准库 `http.server` + `threading` 实现轻量 HTTP server，A2AInteropAdapter + create_a2a_server 提供 Agent Card 与 task handler，未引入 a2a-python SDK——Agent Card 为协议形态的本地格式，非 A2A 官方兼容，但完整协议握手（task status 推送、streaming、认证）仅做骨架。Worker 委派当前 "mini-kernel" 由 FakeScriptedModel 驱动，实际生产应换用 LiteLLMModel。
 
 ### M7 打包与求职物料（2–3 天）✅

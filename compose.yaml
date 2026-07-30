@@ -15,5 +15,21 @@ services:
     volumes:
       - agent-kernel-pgdata:/var/lib/postgresql/data
 
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-agent-kernel}
+    ports:
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-7687}:7687"
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-7474}:7474"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - agent-kernel-neo4jdata:/data
+
 volumes:
   agent-kernel-pgdata:
+  agent-kernel-neo4jdata:

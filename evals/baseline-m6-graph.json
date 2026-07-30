@@ -1,0 +1,14 @@
+{
+  "generated_at": "2026-07-30T09:51:28.916246+00:00",
+  "suite": "graph",
+  "backend": "neo4j",
+  "fact_found": true,
+  "fact_dedup_ok": true,
+  "tool_ignored": true,
+  "edge_dedup_ok": true,
+  "relation_ok": true,
+  "neighbor_ok": true,
+  "incoming_ok": true,
+  "namespace_isolated": true,
+  "ok": true
+}

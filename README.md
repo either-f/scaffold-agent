@@ -169,7 +169,22 @@ M5 策略离线基线：
 
 Worker 委派通过 `WorkerDelegationPort` 实现 orchestrator-worker 模式；
 A2A 互操作通过 `A2AInteropAdapter` + `create_a2a_server` 暴露 Agent Card 与 HTTP task handler；
-图状记忆 adapter 以实体-关系-实体三元组验证 MemoryPort 抽象不需改内核即可扩展到图数据库范式。
+图状记忆现有两个 adapter：`GraphMemory`（SQLite，离线 Fake，CI 用）与
+`Neo4jGraphMemory`（真实 Neo4j，生产 adapter），均以实体-关系-实体三元组验证
+MemoryPort 抽象不需改内核即可扩展到图数据库范式。
+
+启动图数据库并跑真实验收：
+
+```powershell
+docker compose up -d neo4j
+$env:UV_CACHE_DIR = "$PWD\.cache\uv"
+$env:UV_PROJECT_ENVIRONMENT = "$PWD\.venv"
+.tools\uv\Scripts\uv.exe sync --extra graph
+.venv\Scripts\python.exe evals\run_graph.py --output evals/baseline-m6-graph.json
+```
+
+默认连接 `bolt://127.0.0.1:7687`，账号密码可用 `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD`
+覆盖。详见 [ADR-0006](docs/adr/0006-graph-memory-neo4j.md)。
 
 ## M7：Demo 录制与求职物料
 
@@ -203,7 +218,7 @@ A2A 互操作通过 `A2AInteropAdapter` + `create_a2a_server` 暴露 Agent Card 
 | M3 | 语义记忆 + 有界上下文 | ✅ | 语义检索 5/5，50 轮上下文 |
 | M4 | Skill 与沙箱 | ✅ | 渐进披露 + Docker 命令安全构建（离线验证） |
 | M5 | 观测与策略对比 | ✅ | 4 策略 12/12 |
-| M6 | 多 Agent 与互操作 | ✅ | Worker + A2A + 图记忆 |
+| M6 | 多 Agent 与互操作 | ✅ | Worker + A2A + 图记忆（真实 Neo4j） |
 | M7 | 打包与求职物料 | ✅ | 3 个 demo + .cast + 简历 |
 
 ### 坦诚声明
