@@ -111,7 +111,6 @@ agent-kernel/
 │       └── memory_sqlite.py    # sqlite 记忆（M3 换 pgvector）
 ├── skills_library/web-research/SKILL.md   # 示例技能包
 ├── examples/run_demo.py        # 可直接运行的端到端 demo（离线）
-├── tests/test_smoke.py         # 冒烟测试
 └── docs/adr/0001-ports-architecture.md
 ```
 
@@ -121,7 +120,7 @@ agent-kernel/
 
 ### M0 内核骨架 ✅（本次已交付）
 - 产出：上表全部文件；纯标准库、离线可跑；demo 演示"两次工具调用→最终答案"，全程事件可见、每步 checkpoint。
-- 验收：`python examples/run_demo.py` 输出正确答案；`python tests/test_smoke.py` 通过。
+- 验收：`python examples/run_demo.py` 输出正确答案。
 
 ### M1 接真实世界 ✅
 - LiteLLM adapter 联调 1–2 家模型；MCP adapter 完成（stdio 起服务、list_tools、call）；接入 2 个现成 MCP server（filesystem、fetch）；主链跑通后补最薄的 LangChain `BaseChatModel` / `BaseTool` 兼容 adapter。
@@ -143,14 +142,14 @@ agent-kernel/
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
 - 验收：新增一个技能 = 只放一个文件夹；沙箱内代码无法访问宿主敏感路径。
 - 已完成：SkillToolbox 渐进式技能披露（list_tools 只漏 name+desc，正文经 load_skill 按需加载）；DockerSandbox --read-only --network none --cap-drop ALL 安全锁定；CodeActPlanner 端到端通。
-- 坦诚声明：Docker 命令/安全构建已测；本机无 Docker daemon 时使用注入 runner 验证命令参数，未启动真实容器隔离证明。
+- 坦诚声明：Docker 命令/安全构建经离线 demo 注入 runner 验证参数，未启动真实容器隔离证明。
 
 ### M5 观测与评测完备（4–6 天）✅（离线验收）
 - OTel + Langfuse self-host；token/成本统计订阅事件落库；eval 扩到 30+ 任务，ReAct vs Plan-Execute vs CodeAct 三策略对比出报告；用一个确有分支/循环/HITL 的任务验证 `LangGraphPlanner`。
 - 验收：任一 run 可在 Langfuse 里逐步回放；README 有策略对比表，并给出原生 Planner 与 LangGraph 实现的复杂度、恢复能力和效果对比。
 - 已完成：ObservedModel + JsonlEventRecorder + CostLedger + OtelExporter + LangfuseExporter 全部通过 EventBus 订阅实现；4 策略 × 3 用例离线对比 12/12；LangGraphPlanner 已验证 final/tool/HITL 三条分支。
 - M5 策略基线报告见 evals/baseline-m5.json。
-- 坦诚声明：LangGraphPlanner 当前使用注入的假图（fake graph）做集成验证，未打包真实 LangGraph StateGraph 编译流程——当前未配置 LangGraph 依赖或 optional extra，无真实的 StateGraph 集成。OTel/Langfuse 导出器经 fake exporter 单元测试通过，无 self-host Langfuse 实时重放证据。
+- 坦诚声明：LangGraphPlanner 当前使用注入的假图（fake graph）做集成验证，未打包真实 LangGraph StateGraph 编译流程——当前未配置 LangGraph 依赖或 optional extra，无真实的 StateGraph 集成。OTel/Langfuse 导出器仅提供 adapter，无 self-host Langfuse 实时重放证据。
 
 ### M6 多 agent 与互操作（5–8 天）✅（本地验收/协议骨架）
 - 子 agent（orchestrator-worker，借 Claude Agent SDK 分层派生思想）；A2A adapter + Agent Card；图谱记忆 adapter（验证 MemoryPort 扩展性）。

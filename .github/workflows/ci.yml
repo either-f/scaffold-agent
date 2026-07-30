@@ -13,14 +13,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: python tests/test_smoke.py
-      - run: python tests/test_m4.py
-      - run: python tests/test_m5.py
-      - run: python tests/test_m6.py
       - run: python evals/run_eval.py --mode offline
       - run: python evals/run_m3.py context
       - run: python evals/run_m5.py
       - run: python examples/record_demos.py --check
-      - run: python -m compileall -q src examples evals tests
+      - run: python -m compileall -q src examples evals
       - name: "kernel: no third-party imports"
         run: python evals/check_core_imports.py

@@ -1,7 +1,7 @@
 # agent-kernel 简历要点
 
-> 以下陈述均有代码/测试/基线数据作为直接证据。
-> 所有数字来自 `evals/baseline-*.json`、`tests/test_*.py` 实测记录或 `git ls-files` 计数。
+> 以下陈述均有代码、演示或基线数据作为直接证据。
+> 所有数字来自 `evals/baseline-*.json`、离线评测或 `git ls-files` 计数。
 
 ## 项目简介
 
@@ -17,7 +17,7 @@
 | 策略对比 | 12/12（4策略×3用例） | evals/baseline-m5.json |
 | 多轮对话 | 50/50 轮 | evals/run_m3.py context，最大 prompt 23,342 字符 |
 | 沙箱安全控制 | Docker --network none, --read-only, --cap-drop ALL, --security-opt no-new-privileges | src/agent_kernel/adapters/sandbox_docker.py |
-| HITL | 逐工具 CLI 审批 + 断点恢复 | kernel.py + checkpoint.py + tests/test_smoke.py test_hitl_veto |
+| HITL | 逐工具 CLI 审批 + 断点恢复 | kernel.py + checkpoint.py |
 | 观测 | OTel + Langfuse + JSONL 成本台账 | src/agent_kernel/adapters/observability.py |
 | A2A 互操作 | Agent Card + HTTP task handler | src/agent_kernel/adapters/interop_a2a.py |
 | Worker 委派 | 进程内 AgentKernel 委派 | src/agent_kernel/adapters/tools_agents.py |
@@ -30,7 +30,7 @@
 2. **渐进式技能系统**：采用 Anthropic Agent Skills 规范，元信息发现时不泄露正文，正文按需加载。新增技能 = 放一个 SKILL.md 文件夹，零代码变更。
 3. **安全沙箱命令构建**：DockerSandbox 生成 --read-only --network none --cap-drop ALL --security-opt no-new-privileges 的锁定容器命令；离线模式下通过注入 runner 验证命令参数结构，不启动真实容器隔离证明。
 4. **图状记忆**：在传统向量检索之外新增图记忆 adapter，支持实体-关系-实体三元组存储与邻居遍历，验证 MemoryPort 抽象在不改内核的前提下可扩展到图数据库范式。
-5. **完整观测链**：EventBus 进程内发布/订阅，无需入侵内核即可接入 OpenTelemetry 导出器、Langfuse trace 记录器、JSONL 事件回放器、成本台账（当前经 fake exporter 单元测试通过，无 self-host Langfuse 实时重放）。
+5. **完整观测链**：EventBus 进程内发布/订阅，无需入侵内核即可接入 OpenTelemetry 导出器、Langfuse trace 记录器、JSONL 事件回放器、成本台账（当前无 self-host Langfuse 实时重放）。
 
 ## 可演示场景
 
@@ -43,8 +43,8 @@
 
 ## 坦诚声明
 
-- Docker 命令/安全构建已测试；本机无 Docker daemon 时使用注入 runner 验证参数，未提供真实容器隔离证明。
-- OTel/Langfuse 导出器经 fake exporter 单元测试，无 self-host 实时重放证据。
+- Docker 命令/安全构建已通过离线演示验证；未提供真实容器隔离证明。
+- OTel/Langfuse 导出器仅提供 adapter，无 self-host 实时重放证据。
 - LangGraph 策略通过注入假图集成验证，未使用真实 StateGraph 编译流程。
 - A2A 为标准库 HTTP server 实现的本地协议形适配器，非官方/完整 SDK 互操作。
 - Worker 委派为真实进程内 AgentKernel 调用，但 demo 模型为确定性 FakeScriptedModel，非生产 LLM 基准。

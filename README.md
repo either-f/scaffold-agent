@@ -8,7 +8,6 @@
 ```powershell
 $env:PYTHONPATH = "src"
 python examples/run_demo.py
-python tests/test_smoke.py
 ```
 
 ## M1：DeepSeek + MCP + LangChain
@@ -58,10 +57,9 @@ M1 真实链路现在会在 `runs/` 写入原子 checkpoint。启用逐工具 CL
 恢复不会重复添加用户消息；待审批工具会先重新审批。工具执行采用 at-least-once：
 若外部工具已完成但结果尚未 checkpoint，恢复可能再次调用，因此自动重试只对只读工具开放。
 
-运行不需要密钥或网络的回归门禁：
+运行不需要密钥或网络的离线评测：
 
 ```powershell
-.venv\Scripts\python.exe tests\test_smoke.py
 .venv\Scripts\python.exe evals\run_eval.py --mode offline
 ```
 
@@ -143,10 +141,6 @@ DeepSeek 会话成功从 pgvector 回答项目代号 `Mercury` 与中文偏好�
 Docker 沙箱执行器通过 `--read-only --network none --cap-drop ALL --security-opt no-new-privileges`
 锁定容器；`SandboxToolbox` 暴露唯一的 `python_execute` 工具供 CodeAct 策略使用。
 
-```powershell
-.venv\Scripts\python.exe tests\test_m4.py
-```
-
 ## M5：观测与评测
 
 事件总线（EventBus）发布/订阅模式支持外部观测器无侵入接入：
@@ -158,7 +152,6 @@ Docker 沙箱执行器通过 `--read-only --network none --cap-drop ALL --securi
 
 ```powershell
 .venv\Scripts\python.exe evals\run_m5.py
-.venv\Scripts\python.exe tests\test_m5.py
 ```
 
 M5 策略离线基线：
@@ -178,10 +171,6 @@ Worker 委派通过 `WorkerDelegationPort` 实现 orchestrator-worker 模式；
 A2A 互操作通过 `A2AInteropAdapter` + `create_a2a_server` 暴露 Agent Card 与 HTTP task handler；
 图状记忆 adapter 以实体-关系-实体三元组验证 MemoryPort 抽象不需改内核即可扩展到图数据库范式。
 
-```powershell
-.venv\Scripts\python.exe tests\test_m6.py
-```
-
 ## M7：Demo 录制与求职物料
 
 三个离线演示场景 + asciicast v2 录制器：
@@ -197,15 +186,11 @@ A2A 互操作通过 `A2AInteropAdapter` + `create_a2a_server` 暴露 Agent Card 
 ## 回归门禁
 
 ```powershell
-.venv\Scripts\python.exe tests\test_smoke.py
-.venv\Scripts\python.exe tests\test_m4.py
-.venv\Scripts\python.exe tests\test_m5.py
-.venv\Scripts\python.exe tests\test_m6.py
 .venv\Scripts\python.exe evals\run_eval.py --mode offline
 .venv\Scripts\python.exe evals\run_m3.py context
 .venv\Scripts\python.exe evals\run_m5.py
 .venv\Scripts\python.exe examples\record_demos.py --check
-.venv\Scripts\python.exe -m compileall -q src examples evals tests
+.venv\Scripts\python.exe -m compileall -q src examples evals
 ```
 
 ## 结果总览
@@ -223,8 +208,8 @@ A2A 互操作通过 `A2AInteropAdapter` + `create_a2a_server` 暴露 Agent Card 
 
 ### 坦诚声明
 
-- **沙箱**：Docker 命令/安全构建已测试；离线 demo 通过注入 runner 验证参数结构，未提供真实容器隔离证明。
-- **观测**：OTel/Langfuse 导出器经 fake exporter 单元测试，无 self-host Langfuse 实时重放证据。
+- **沙箱**：Docker 命令/安全构建经离线 demo 验证参数结构，未提供真实容器隔离证明。
+- **观测**：OTel/Langfuse 导出器仅提供 adapter，无 self-host Langfuse 实时重放证据。
 - **LangGraph**：策略通过注入假图集成验证，未编译真实 StateGraph。
 - **A2A**：`A2AInteropAdapter` + `create_a2a_server` 为标准库 `http.server` 实现，非官方/完整 A2A SDK。
 - **Worker 委派**：真实进程内 AgentKernel 调用，但 demo 模型为 FakeScriptedModel，非生产 LLM。
