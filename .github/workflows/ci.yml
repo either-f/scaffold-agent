@@ -16,8 +16,13 @@ jobs:
       - run: python evals/run_eval.py --mode offline
       - run: python evals/run_m3.py context
       - run: python evals/run_m5.py
+      - run: python evals/run_composite_memory.py
       - run: python evals/run_preferences.py
       - run: python evals/run_consolidation.py --mode offline
+      - run: pip install opentelemetry-sdk
+      - run: python evals/run_observability_real.py
+      - run: pip install "langgraph>=0.6,<0.7"
+      - run: python evals/run_langgraph_real.py
       - run: python examples/record_demos.py --check
       - run: python -m compileall -q src examples evals
       - name: "kernel: no third-party imports"

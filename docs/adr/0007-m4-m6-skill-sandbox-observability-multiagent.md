@@ -12,9 +12,14 @@ ADR"）。本篇按 PLAN.md 里已记录的决策与坦诚声明补齐，不改�
 - 沙箱选 Docker（本地起步），用 `--read-only --network none --cap-drop ALL
   --security-opt no-new-privileges` 锁定，而非直接对齐 E2B 云沙箱 API——先用最小本地方案
   验证 CodeAct 策略可行，接口设计上留出替换空间（`SandboxExecutor`）。
-- 坦诚声明：安全参数经离线 demo 注入 runner 验证结构，未启动真实容器做隔离穿透测试。
-  真实容器验证的成本（起 Docker、写攻击面测试）明显高于当前收益，留到有真实沙箱攻防
-  需求时再做，不是这次"往生产推进"的优先项。
+- 坦诚声明（已解决，2026-07-31）：此前安全参数只经离线 demo 注入 runner 验证结构，
+  未启动真实容器做隔离穿透测试。现已在真实 Docker daemon（远程主机，本机 Docker Desktop
+  当时未启动）上逐字复用 `DockerSandbox.build_command()` 跑通 8 项隔离验证：只读文件系统
+  拒绝写入、`/tmp` 可写、出网被拒绝、看不到宿主挂载路径、`pids.max`/`memory.max` cgroup
+  限额与配置一致、`NoNewPrivs=1`。过程中发现并修复一个真实 bug：`execute()` 传给本地
+  `subprocess.run` 的 `env` 只含 `_AKC`、不含 `PATH`，docker 装在 POSIX 默认路径之外会
+  找不到可执行文件；已改成继承宿主环境再叠加 `_AKC`，容器内隔离边界不受影响（容器只会
+  拿到 `-e _AKC` 点名的这一个变量）。见 [evals/baseline-m4-sandbox-real.json](../../evals/baseline-m4-sandbox-real.json)。
 
 ## M5：观测与评测
 
@@ -23,9 +28,17 @@ ADR"）。本篇按 PLAN.md 里已记录的决策与坦诚声明补齐，不改�
   ADR-0001 定的横切件设计。
 - 4 策略（ReAct/Plan-Execute/CodeAct/LangGraph）用同一套离线 eval 对比，复用 M2 的
   `run_task` 评测框架结构，不另起一套评测协议。
-- 坦诚声明：LangGraphPlanner 用注入的假图做集成验证，未编译真实 LangGraph StateGraph；
-  OTel/Langfuse 只提供 adapter，无 self-host Langfuse 实时重放证据。两者都需要额外起
-  服务/加真依赖才能验证，比 M6 图记忆换生产库的性价比低，暂不在本轮"生产推进"范围内。
+- 坦诚声明（已解决，2026-07-31）：此前 LangGraphPlanner 只用注入的假图做集成验证，未编译
+  真实 LangGraph StateGraph。现已在 `adapters/langgraph_demo_graph.py` 编译一个真正的
+  4 节点 + 条件边 StateGraph 喂给 `LangGraphPlanner`，final/tool/HITL 三条真实分支全部
+  跑通；`LangGraphPlanner` 本身接口零改动，因为它本来就只依赖 `graph.invoke(dict)->dict`
+  这个薄契约，验证了 ADR-0001 里"新概念接入=新 adapter，内核零改动"的设计承诺。
+- 坦诚声明（OTel 部分已解决，2026-07-31）：此前 OTel/Langfuse 只提供 adapter，无真实
+  SDK 验证。现已用真实 `opentelemetry-sdk` + `InMemorySpanExporter` 验证全部 6 类事件
+  正确生成 span；过程中发现并修复一个真实 bug——`tool.before` 的 `args` dict 不满足
+  OTel attribute 的标量类型要求，SDK 静默丢弃该字段，调用参数从未真正进过 trace，现在
+  序列化成 JSON 字符串再塞进 span。Langfuse self-host/Cloud 实时重放仍未验证：没有现成
+  实例，自建 self-host 需要 Postgres+ClickHouse+Redis，成本明显高于这轮其它验证项。
 
 ## M6：多 Agent 与互操作
 

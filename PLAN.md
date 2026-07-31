@@ -138,6 +138,38 @@ agent-kernel/
 - M3B 已完成：同 run_id 多轮续聊、turn/step checkpoint、长工具结果外置与增量历史摘要。
 - 实测：50 轮离线对话最大 ReAct prompt 23,342 字符；DeepSeek 跨会话正确回忆 `Mercury` 与中文偏好。
 
+### 扩展：真实 LangGraph StateGraph 验证（2026-07-31）✅
+- `adapters/langgraph_demo_graph.py` 编译一个真正的 `langgraph.graph.StateGraph`
+  （classify/call_tool/answer_with_result/answer_direct 4 节点 + `add_conditional_edges`
+  真实路由），替代此前 M5 eval 里的脚本化假图，喂给现有 `LangGraphPlanner`（内核/Planner
+  接口零改动，`LangGraphPlanner` 本来就只依赖 `graph.invoke(dict)->dict` 契约）。
+- 验收：`evals/run_langgraph_real.py`——final/tool/HITL 三条真实分支全部跑通，HITL 分支
+  验证真实图产出的 `ToolCall` 会同步触发内核 `approval` 回调（非脚本模拟）。见
+  [evals/baseline-m5-langgraph-real.json](evals/baseline-m5-langgraph-real.json)。
+- 新增可选依赖 `langgraph`（`pyproject.toml` extras），CI 新增专门安装步骤跑这条验证。
+
+### 扩展：真实 OpenTelemetry 观测验证（2026-07-31）✅
+- 用真实 `opentelemetry-sdk` + `InMemorySpanExporter`（非 mock）跑一次完整 run，验证
+  `run.start`/`step.start`/`model.complete`/`tool.before`/`tool.after`/`run.end` 全部
+  正确生成 span，token 用量与耗时属性齐全。见
+  [evals/baseline-m5-otel-real.json](evals/baseline-m5-otel-real.json)。
+- 发现并修复真实 bug：`tool.before` 的 `args` dict 不满足 OTel span attribute 的标量类型
+  要求，SDK 静默丢弃该字段（只打 warning，外层 try/except 完全捕不到），调用参数从未真正
+  进过 trace；`OtelExporter` 现在把非标量 payload 值序列化成 JSON 字符串再塞进 span。
+- Langfuse self-host/Cloud 实时重放仍未验证：没有现成实例，自建 self-host 需要
+  Postgres+ClickHouse+Redis，成本明显高于这轮其它验证项，留待有真实需求时再做。
+
+### 扩展：CompositeMemory 统一分层记忆（2026-07-31）✅
+- `adapters/memory_composite.py` 新增 `CompositeMemory(MemoryPort)`：组合 episodic
+  （短期情景，全量最近消息）+ semantic（长期语义，提炼后事实）+ 可选 graph（图谱），
+  对外仍是标准 `MemoryPort.add/search`，内核零改动。
+- 写路径只落 episodic，不重复写 semantic，长期语义记忆的"提炼"交给离线记忆巩固脚本；
+  查询路径 semantic > graph > episodic 优先级合并去重。
+- 验收：`evals/run_composite_memory.py`（纯逻辑 Fake 测试）——写路径只落 episodic、
+  查询优先级、去重、graph 可选均通过；已入 CI。四层记忆体系里"工作记忆"仍由
+  `ContextBuilder` 承担（非 MemoryPort 范畴），"程序技能记忆"（成功工具序列沉淀为
+  Skill）不属于 MemoryPort 契约，留作后续独立工作。
+
 ### 扩展：偏好与约束记忆（2026-07-31）✅
 - `ReactPlanner` 新增可选 `preferences: MemoryPort`，固定 query 检索、每轮无条件注入 system prompt，
   跟按当前输入相关性检索的常规记忆是两条独立路径。
@@ -157,7 +189,13 @@ agent-kernel/
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
 - 验收：新增一个技能 = 只放一个文件夹；沙箱内代码无法访问宿主敏感路径。
 - 已完成：SkillToolbox 渐进式技能披露（list_tools 只漏 name+desc，正文经 load_skill 按需加载）；DockerSandbox --read-only --network none --cap-drop ALL 安全锁定；CodeActPlanner 端到端通。
-- 坦诚声明：Docker 命令/安全构建经离线 demo 注入 runner 验证参数，未启动真实容器隔离证明。
+- 坦诚声明（已解决，2026-07-31）：此前 Docker 命令/安全构建只经离线 demo 注入 runner 验证
+  参数，未启动真实容器隔离证明；现已在真实 Docker daemon 上跑通 8 项隔离验证（只读文件系统、
+  无网络、无宿主挂载、pids/memory cgroup 限额、no-new-privileges），逐字复用
+  `DockerSandbox.build_command()`，非重写。过程中发现并修复一个真实 bug：`execute()` 传给
+  本地 `subprocess.run` 的 `env` 只含 `_AKC`、不含 `PATH`，docker 装在 POSIX 默认路径之外
+  会找不到可执行文件；已改成继承宿主环境再叠加 `_AKC`。见
+  [evals/baseline-m4-sandbox-real.json](evals/baseline-m4-sandbox-real.json)。
 
 ### M5 观测与评测完备（4–6 天）✅（离线验收）
 - OTel + Langfuse self-host；token/成本统计订阅事件落库；eval 扩到 30+ 任务，ReAct vs Plan-Execute vs CodeAct 三策略对比出报告；用一个确有分支/循环/HITL 的任务验证 `LangGraphPlanner`。

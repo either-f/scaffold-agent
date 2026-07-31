@@ -12,6 +12,7 @@ langchain = ["langchain-core>=1.4,<2"]
 memory = ["psycopg[binary]>=3.2,<4", "pgvector>=0.4,<1"]
 graph = ["neo4j>=5.26,<6"]
 obs = ["opentelemetry-sdk", "langfuse"]
+langgraph = ["langgraph>=0.6,<0.7"]
 
 [build-system]
 requires = ["setuptools>=68"]

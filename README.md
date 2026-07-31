@@ -132,6 +132,32 @@ M3B 离线基线（2026-07-27）：50/50 轮完成，增量摘要 2 次，最大
 DeepSeek 会话成功从 pgvector 回答项目代号 `Mercury` 与中文偏好；完整结果见
 [evals/baseline-m3.json](evals/baseline-m3.json)。
 
+## CompositeMemory：统一封装分层记忆
+
+`adapters/memory_composite.py` 的 `CompositeMemory(MemoryPort)` 把短期情景记忆（全量
+最近消息，如 `SqliteMemory`）、长期语义记忆（提炼后的事实，如 `PgVectorMemory`）、
+可选图谱记忆（`GraphMemory` / `Neo4jGraphMemory`）统一封装成一个 `MemoryPort`，对
+`AgentKernel` 和 `Planner` 完全透明——它们只看到标准的 `add/search`。
+
+```python
+memory = CompositeMemory(
+    episodic=SqliteMemory("runs/episodic.db"),
+    semantic=PgVectorMemory(dsn, "long-term"),
+    graph=Neo4jGraphMemory(uri, user, password, "graph"),  # 可选
+)
+```
+
+- 写：只落 episodic，不重复写 semantic——长期语义记忆只该存"提炼后的事实"，不是每条
+  原始消息，运行时全量写入违反 ADR-0004 的既定边界；提炼交给
+  [离线记忆巩固](#离线记忆巩固)。
+- 查：semantic（已提炼知识，优先级最高）→ graph（关系型证据，若配置）→ episodic
+  （原始细节，兜底）三路合并去重返回，保证"长期沉淀"排在"原始细节"前面。
+- 内核零改动：`CompositeMemory` 就是一个新 adapter，`kernel.py`/`ports.py` 没有变化。
+
+```powershell
+.venv\Scripts\python.exe evals\run_composite_memory.py
+```
+
 ## 偏好与约束记忆
 
 `ReactPlanner` 支持一个独立于常规记忆的 `preferences: MemoryPort`：常规记忆按当前用户输入
@@ -185,6 +211,14 @@ $env:AGENT_MEMORY_DSN = "postgresql://agent:agent@127.0.0.1:5432/agent_memory"
 Docker 沙箱执行器通过 `--read-only --network none --cap-drop ALL --security-opt no-new-privileges`
 锁定容器；`SandboxToolbox` 暴露唯一的 `python_execute` 工具供 CodeAct 策略使用。
 
+真实容器隔离验证（2026-07-31）：在真实 Docker daemon 上跑 `DockerSandbox.build_command()`
+构造的命令（逐字复用，非重写），8 项全部通过——写宿主文件被拒绝、`/tmp` 可写、
+出网被拒绝、看不到宿主挂载路径、`pids.max`/`memory.max` cgroup 限额与配置一致、
+`NoNewPrivs=1`。结果见 [evals/baseline-m4-sandbox-real.json](evals/baseline-m4-sandbox-real.json)。
+验证过程中发现并修复一个真实 bug：`execute()` 传给本地 `subprocess.run` 的 `env` 之前只有
+`_AKC`、没有 `PATH`，docker 装在 POSIX 默认路径之外时会找不到可执行文件；现在改成继承
+宿主环境再叠加 `_AKC`，容器内仍只会拿到 `-e _AKC` 点名的这一个变量，隔离边界不受影响。
+
 ## M5：观测与评测
 
 事件总线（EventBus）发布/订阅模式支持外部观测器无侵入接入：
@@ -206,6 +240,35 @@ M5 策略离线基线：
 | Plan-Execute | 3/3 | 2.00 | 首步额外生成计划 |
 | CodeAct | 3/3 | 2.00 | 沙箱执行，安全隔离 |
 | LangGraph | 3/3 | 1.67 | 图适配，含 HITL 形模拟 |
+
+真实 OpenTelemetry 验证（2026-07-31）：用真实 `opentelemetry-sdk`（非 mock）+
+`InMemorySpanExporter` 跑一次完整 run，8 个 span 全部生成（`run.start`/`step.start`×2/
+`model.complete`×2/`tool.before`/`tool.after`/`run.end`），token 用量与耗时属性都在。
+验证过程中发现并修复一个真实 bug：`tool.before` 的 `args` 是 dict，OTel span attribute
+只接受标量或同类序列，SDK 会静默丢弃这个字段（只打 warning，外层 try/except 完全捕不到）——
+调用参数从来没真正进过 trace；现在 `OtelExporter` 把非标量 payload 值序列化成 JSON 字符串
+再塞进 span，已验证 `args` 确实被捕获。见
+[evals/baseline-m5-otel-real.json](evals/baseline-m5-otel-real.json)。
+
+```powershell
+.venv\Scripts\python.exe evals\run_observability_real.py
+```
+
+Langfuse 仍未验证：`LangfuseExporter` 把事件 metadata 整体转发（Langfuse 的 metadata 是
+任意 JSON，不受 OTel 那种标量属性限制，理论上没有同类问题），但需要一个 self-host 或
+Langfuse Cloud 实例才能验证真实 trace 回放；本地/远程都没有现成的 Langfuse 服务，暂不推进——
+自建 self-host 至少要 Postgres + ClickHouse + Redis，比这轮其它验证重得多。
+
+真实 LangGraph StateGraph 验证（2026-07-31）：`adapters/langgraph_demo_graph.py` 编译一个
+真正的 `langgraph.graph.StateGraph`（4 节点 + 条件边：classify 判断走 tool / 已有工具结果
+的 final / 无需工具的 final，`add_conditional_edges` 真实路由），喂给 `LangGraphPlanner`，
+不是回放脚本化输出。final / tool / HITL 三条分支全部真实跑通，HITL 分支验证真实图产出的
+`ToolCall` 会触发内核 `approval` 回调（同步拦截，非模拟）。见
+[evals/baseline-m5-langgraph-real.json](evals/baseline-m5-langgraph-real.json)。
+
+```powershell
+.venv\Scripts\python.exe evals\run_langgraph_real.py
+```
 
 完整报告见 [evals/baseline-m5.json](evals/baseline-m5.json)。
 
@@ -258,8 +321,11 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 .venv\Scripts\python.exe evals\run_eval.py --mode offline
 .venv\Scripts\python.exe evals\run_m3.py context
 .venv\Scripts\python.exe evals\run_m5.py
+.venv\Scripts\python.exe evals\run_composite_memory.py
 .venv\Scripts\python.exe evals\run_preferences.py
 .venv\Scripts\python.exe evals\run_consolidation.py --mode offline
+.venv\Scripts\python.exe evals\run_observability_real.py  # 需要 --extra obs（真实 opentelemetry-sdk，非 mock）
+.venv\Scripts\python.exe evals\run_langgraph_real.py  # 需要 --extra langgraph（真实编译 StateGraph）
 .venv\Scripts\python.exe examples\record_demos.py --check
 .venv\Scripts\python.exe -m compileall -q src examples evals
 ```
@@ -272,16 +338,24 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 | M1 | DeepSeek + MCP + LangChain | ✅ | 真实模型链路 |
 | M2 | 恢复、审批与 Eval | ✅ | 离线 10/10，真模型 9/10 |
 | M3 | 语义记忆 + 有界上下文 | ✅ | 语义检索 5/5，50 轮上下文 |
-| M4 | Skill 与沙箱 | ✅ | 渐进披露 + Docker 命令安全构建（离线验证） |
-| M5 | 观测与策略对比 | ✅ | 4 策略 12/12 |
+| M4 | Skill 与沙箱 | ✅ | 渐进披露 + Docker 沙箱（真实容器隔离验证 8/8） |
+| M5 | 观测与策略对比 | ✅ | 4 策略 12/12 + 真实 OTel span + 真实 LangGraph StateGraph |
 | M6 | 多 Agent 与互操作 | ✅ | Worker + A2A + 图记忆（真实 Neo4j） |
 | M7 | 打包与求职物料 | ✅ | 3 个 demo + .cast + 简历 |
 
 ### 坦诚声明
 
-- **沙箱**：Docker 命令/安全构建经离线 demo 验证参数结构，未提供真实容器隔离证明。
-- **观测**：OTel/Langfuse 导出器仅提供 adapter，无 self-host Langfuse 实时重放证据。
-- **LangGraph**：策略通过注入假图集成验证，未编译真实 StateGraph。
+- ~~**沙箱**：Docker 命令/安全构建经离线 demo 验证参数结构，未提供真实容器隔离证明。~~
+  已解决（2026-07-31）：在真实 Docker daemon 上跑通 8 项隔离验证（只读文件系统、无网络、
+  无宿主挂载、cgroup 限额、no-new-privileges），见 M4 章节与
+  [evals/baseline-m4-sandbox-real.json](evals/baseline-m4-sandbox-real.json)。
+- ~~**观测**：OTel/Langfuse 导出器仅提供 adapter，无 self-host Langfuse 实时重放证据。~~
+  OTel 部分已解决（2026-07-31）：真实 `opentelemetry-sdk` 验证 8 个 span 全部生成，
+  见 M5 章节。Langfuse self-host/Cloud 实时重放仍未验证——没有现成实例，自建 self-host
+  基础设施（Postgres+ClickHouse+Redis）成本明显高于这轮其它验证项，暂不推进。
+- ~~**LangGraph**：策略通过注入假图集成验证，未编译真实 StateGraph。~~ 已解决
+  （2026-07-31）：`adapters/langgraph_demo_graph.py` 编译真实 `StateGraph`（4 节点 +
+  条件边），`LangGraphPlanner` 驱动 final/tool/HITL 三条真实分支全部跑通，见 M5 章节。
 - **A2A**：`A2AInteropAdapter` + `create_a2a_server` 为标准库 `http.server` 实现，非官方/完整 A2A SDK。
 - ~~**Worker 委派**：demo 模型为 FakeScriptedModel，非生产 LLM。~~ 已解决（2026-07-31）：
   `evals/run_worker_real.py` 用真实 DeepSeek 驱动父子两层 AgentKernel，通过。demo 本身

@@ -193,6 +193,30 @@ class _OtelTracer(Protocol):
     def start_span(self, name: str, attributes: dict[str, Any] | None = None) -> Any: ...
 
 
+_OTEL_PRIMITIVE_TYPES = (bool, str, bytes, int, float)
+
+
+def _otel_attributes(payload: dict[str, Any]) -> dict[str, Any]:
+    """OTel span attribute 只接受 bool/str/bytes/int/float 或它们的同类序列；
+    其它类型（比如 tool.before 的 args dict）SDK 会静默丢弃该字段，只打一条
+    warning，不抛异常——外层 try/except 完全捕不到。这里主动序列化成 JSON
+    字符串，避免调用参数这类关键调试信息悄悄从 trace 里消失。
+    """
+    attributes: dict[str, Any] = {}
+    for key, value in payload.items():
+        if isinstance(value, _OTEL_PRIMITIVE_TYPES):
+            attributes[key] = value
+        elif isinstance(value, (list, tuple)) and all(
+            isinstance(item, _OTEL_PRIMITIVE_TYPES) for item in value
+        ):
+            attributes[key] = value
+        elif value is None:
+            attributes[key] = ""
+        else:
+            attributes[key] = json.dumps(value, ensure_ascii=False, default=str)
+    return attributes
+
+
 class OtelExporter:
     """把事件转成 OpenTelemetry span。tracer 可注入，便于离线测试。"""
 
@@ -225,7 +249,7 @@ class OtelExporter:
     def handler(self) -> Handler:
         def _handle(event: Event) -> None:
             try:
-                span = self.tracer.start_span(event.type, attributes=dict(event.payload))
+                span = self.tracer.start_span(event.type, attributes=_otel_attributes(event.payload))
                 end = getattr(span, "end", None)
                 if callable(end):
                     end()

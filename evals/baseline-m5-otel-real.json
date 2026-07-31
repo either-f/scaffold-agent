@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-07-31T01:32:43.481137+00:00",
+  "suite": "otel-real",
+  "sdk": "opentelemetry-sdk（真实 SDK + InMemorySpanExporter，非 mock）",
+  "span_count": 8,
+  "span_names": [
+    "model.complete",
+    "model.complete",
+    "run.end",
+    "run.start",
+    "step.start",
+    "step.start",
+    "tool.after",
+    "tool.before"
+  ],
+  "model_complete_spans": 2,
+  "has_token_attrs": true,
+  "tool_before_spans": 1,
+  "tool_after_spans": 1,
+  "run_start_spans": 1,
+  "run_end_spans": 1,
+  "args_captured": true,
+  "ok": true
+}

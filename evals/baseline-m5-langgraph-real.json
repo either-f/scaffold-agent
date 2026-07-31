@@ -1,0 +1,34 @@
+{
+  "generated_at": "2026-07-31T01:27:11.360012+00:00",
+  "suite": "langgraph-real",
+  "graph": "真实编译的 langgraph.graph.StateGraph（4 节点 + 条件边），非脚本化假图",
+  "final_branch": {
+    "status": "done",
+    "steps": 1,
+    "answer": "你好，你是谁？",
+    "ok": true
+  },
+  "tool_branch": {
+    "status": "done",
+    "steps": 2,
+    "answer": "计算结果：40",
+    "ok": true
+  },
+  "hitl_branch": {
+    "status": "done",
+    "steps": 2,
+    "answer": "计算结果：144",
+    "approval_events": [
+      {
+        "run_id": "b26ccd30e957",
+        "tool": "calc",
+        "args": {
+          "expression": "12*12"
+        },
+        "approved": true
+      }
+    ],
+    "ok": true
+  },
+  "ok": true
+}

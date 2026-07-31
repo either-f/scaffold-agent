@@ -12,6 +12,7 @@ runner 可注入，默认 subprocess；单测用 fake runner 断言命令构造�
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import Callable, Sequence
@@ -79,7 +80,10 @@ class DockerSandbox:
     def execute(self, code: str) -> str:
         if not isinstance(code, str) or not code.strip():
             raise ValueError("沙箱拒绝执行空代码")
-        env = {"_AKC": base64.b64encode(code.encode("utf-8")).decode("ascii")}
+        # 继承宿主环境（PATH 等，保证能找到 docker 可执行文件），只加一个 _AKC；
+        # 容器内只会拿到 build_command() 里 `-e _AKC` 显式点名的这一个变量，
+        # 宿主环境的其它变量不会流入容器，隔离边界不受影响。
+        env = {**os.environ, "_AKC": base64.b64encode(code.encode("utf-8")).decode("ascii")}
         try:
             proc = self._runner(
                 self.build_command(),

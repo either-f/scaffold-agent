@@ -1,0 +1,19 @@
+{
+  "generated_at": "2026-07-31T01:20:00+00:00",
+  "suite": "sandbox-real",
+  "host": "remote docker daemon (verified 2026-07-31, not local Docker Desktop)",
+  "image": "python:3.11.14-slim-bookworm",
+  "command_source": "src/agent_kernel/adapters/sandbox_docker.py DockerSandbox.build_command()（逐字复用，未改写命令构造逻辑）",
+  "checks": {
+    "normal_exec": { "output": "4", "expected": "4", "passed": true },
+    "readonly_fs": { "output": "WRITE_BLOCKED", "expected": "WRITE_BLOCKED", "passed": true },
+    "tmp_writable": { "output": "TMP_WRITE_OK", "expected": "TMP_WRITE_OK", "passed": true },
+    "no_network": { "output": "NET_BLOCKED", "expected": "NET_BLOCKED", "passed": true },
+    "no_host_mount": { "output": "HOST_HIDDEN", "expected": "HOST_HIDDEN", "passed": true },
+    "pids_limit_cgroup": { "output": "128", "expected": "128", "passed": true },
+    "memory_limit_cgroup": { "output": "536870912", "expected": "536870912", "passed": true },
+    "no_new_privileges": { "output": "1", "expected": "1", "passed": true }
+  },
+  "ok": true,
+  "note": "验证过程中发现 DockerSandbox.execute() 传给本地 subprocess.run 的 env 只含 _AKC、不含 PATH，docker 不在 POSIX 默认路径（/bin:/usr/bin 之外）时会找不到可执行文件；已在 sandbox_docker.py 里改成继承宿主环境再叠加 _AKC，容器内仍只会拿到 -e _AKC 点名的这一个变量，隔离边界未受影响。"
+}
