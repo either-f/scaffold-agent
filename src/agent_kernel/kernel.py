@@ -12,7 +12,16 @@ from typing import Callable
 
 from .events import EventBus
 from .ports import CheckpointStore, EffectLedger, MemoryPort, ModelPort, PlannerPort, ToolPort
-from .types import Effect, Event, FinalAnswer, RunState, ToolCall, ToolEffectPolicy, hash_arguments
+from .types import (
+    Effect,
+    Event,
+    FinalAnswer,
+    RunState,
+    ToolCall,
+    ToolEffectPolicy,
+    ToolResult,
+    hash_arguments,
+)
 
 Approval = Callable[[ToolCall], bool]
 
@@ -29,6 +38,21 @@ class EffectUnresolvedError(RuntimeError):
         super().__init__(
             f"effect {effect_id}（工具 {tool_name}）状态为 {status}，不允许自动重试，"
             "需要人工核实外部系统后手动修正账本（mark_succeeded/mark_failed）再 resume()"
+        )
+
+
+class EffectArgumentMismatchError(RuntimeError):
+    """账本里 effect_id 命中的记录，参数哈希却跟本次调用对不上：
+    说明 effect_id 发生了冲突（例如跨轮复用了同一个 id），账本已不可信。
+    拒绝自动回放/重试，需要人工核实后再处理。"""
+
+    def __init__(self, effect_id: str, run_id: str, tool_name: str) -> None:
+        self.effect_id = effect_id
+        self.run_id = run_id
+        self.tool_name = tool_name
+        super().__init__(
+            f"effect {effect_id}（工具 {tool_name}）账本参数哈希与本次调用不一致，"
+            "疑似 effect_id 冲突，拒绝自动回放/重试，需要人工核实"
         )
 
 
@@ -131,7 +155,7 @@ class AgentKernel:
                 state.pending_tool = action
                 effect_id = None
                 if self.effects:
-                    effect_id = f"{state.run_id}:{state.step}"
+                    effect_id = f"{state.run_id}:{state.turn}:{state.step}"
                     state.pending_effect_id = effect_id
                     self.effects.propose(
                         Effect(
@@ -169,12 +193,14 @@ class AgentKernel:
             if self.effects and state.pending_effect_id
             else None
         )
+        if effect is not None and effect.arguments_hash != hash_arguments(action.args):
+            raise EffectArgumentMismatchError(effect.effect_id, state.run_id, action.name)
         if effect is not None and effect.status in {"succeeded", "executing", "failed"}:
             if effect.status == "succeeded":
                 self._emit(
                     "effect.replay", run_id=state.run_id, effect_id=effect.effect_id, tool=action.name
                 )
-                self._finish_tool(state, action, effect.result_ref or "")
+                self._finish_tool(state, action, ToolResult(content=effect.result_ref or ""))
                 return
             policy = self._effect_policy(action.name)
             max_attempts = policy.retry_policy.max_attempts if policy else 1
@@ -203,7 +229,9 @@ class AgentKernel:
             )
             state.status = "running"
             if not approved:
-                self._finish_tool(state, action, f"[HITL] 用户否决了工具调用 {action.name}。")
+                self._finish_tool(
+                    state, action, ToolResult(content=f"[HITL] 用户否决了工具调用 {action.name}。")
+                )
                 return
             if self.effects and state.pending_effect_id:
                 self.effects.mark_approved(state.pending_effect_id)
@@ -212,34 +240,42 @@ class AgentKernel:
         result = self._execute_tool(state, action)
         self._finish_tool(state, action, result)
 
-    def _execute_tool(self, state: RunState, action: ToolCall) -> str:
+    def _execute_tool(self, state: RunState, action: ToolCall) -> ToolResult:
         self._emit("tool.started", run_id=state.run_id, step=state.step, tool=action.name, args=action.args)
         if self.effects and state.pending_effect_id:
             self.effects.mark_executing(state.pending_effect_id)
         try:
             result = self.tools.call(action.name, action.args)
         except Exception as exc:  # 工具失败也要回灌上下文，让模型自己纠错
-            result = f"[tool-error] {exc}"
+            result = ToolResult(content=f"[tool-error] {exc}")
             if self.effects and state.pending_effect_id:
-                self.effects.mark_failed(state.pending_effect_id, result)
+                self.effects.mark_failed(state.pending_effect_id, result.content)
             return result
         if self.effects and state.pending_effect_id:
-            self.effects.mark_succeeded(state.pending_effect_id, result)
+            self.effects.mark_succeeded(state.pending_effect_id, result.content)
         return result
 
     def _effect_policy(self, tool_name: str) -> ToolEffectPolicy | None:
         return next((t.effect_policy for t in self.tools.list_tools() if t.name == tool_name), None)
 
-    def _finish_tool(self, state: RunState, action: ToolCall, result: str) -> None:
-        self._emit("tool.after", run_id=state.run_id, tool=action.name, result=result)
+    def _finish_tool(self, state: RunState, action: ToolCall, result: ToolResult) -> None:
+        # ponytail: effect ledger 与消息历史都只落 text；artifacts 只在事件流里给外部观测器，
+        # 副作用重放不恢复 artifacts（回放场景下模型只需要看到当时回灌的文本即可）。
+        text = result.content
+        if result.artifacts:
+            text += "\n" + "\n".join(f"[artifact] {a.uri} ({a.mime_type})" for a in result.artifacts)
+        artifacts_payload = [
+            {"uri": a.uri, "mime_type": a.mime_type, "description": a.description} for a in result.artifacts
+        ]
+        self._emit("tool.after", run_id=state.run_id, tool=action.name, result=text, artifacts=artifacts_payload)
         assistant_message = json.dumps(
             {"thought": action.thought, "tool": action.name, "args": action.args},
             ensure_ascii=False,
         )
         state.add("assistant", assistant_message)
-        state.add("tool", result, name=action.name)
+        state.add("tool", text, name=action.name)
         if self.memory:
-            self.memory.add(state.run_id, "tool", f"{action.name}: {result}")
+            self.memory.add(state.run_id, "tool", f"{action.name}: {text}")
         state.pending_tool = None
         state.pending_effect_id = None
         self._emit(
@@ -248,7 +284,8 @@ class AgentKernel:
             step=state.step,
             tool=action.name,
             args=action.args,
-            result=result,
+            result=text,
+            artifacts=artifacts_payload,
             assistant_message=assistant_message,
         )
         self._checkpoint(state)

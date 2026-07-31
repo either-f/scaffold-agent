@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from ..kernel import AgentKernel
 from ..ports import ToolPort
-from ..types import ToolSpec
+from ..types import ToolResult, ToolSpec
 
 
 class WorkerDelegationPort(ToolPort):
@@ -43,7 +43,7 @@ class WorkerDelegationPort(ToolPort):
             )
         return [*self._inner.list_tools(), *worker_specs]
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         if not name.startswith("worker_"):
             return self._inner.call(name, args)
 
@@ -67,4 +67,4 @@ class WorkerDelegationPort(ToolPort):
         if not answer:
             raise RuntimeError(f"worker '{worker_name}' 返回了空答案")
 
-        return answer
+        return ToolResult(content=answer)

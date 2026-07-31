@@ -19,7 +19,7 @@ from agent_kernel.fork import fork
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.ports import ModelPort, ToolPort
-from agent_kernel.types import ModelOutput, RunState, ToolSpec
+from agent_kernel.types import ModelOutput, RunState, ToolResult, ToolSpec
 
 TOOL_CALL_SCRIPT = json.dumps(
     {"thought": "需要先发送生产环境部署通知", "tool": "notify", "args": {"channel": "#ops", "message": "部署 v2.3.0"}}
@@ -52,9 +52,9 @@ class NotifyTool(ToolPort):
     def list_tools(self) -> list[ToolSpec]:
         return [ToolSpec("notify", "发送通知", {})]
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         self.calls += 1
-        return f"已发送到 {args.get('channel')}：{args.get('message')}"
+        return ToolResult(content=f"已发送到 {args.get('channel')}：{args.get('message')}")
 
 
 def crash_approval(_call) -> bool:

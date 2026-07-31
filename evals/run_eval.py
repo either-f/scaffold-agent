@@ -20,7 +20,7 @@ from agent_kernel.events import EventBus
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.ports import ToolPort
-from agent_kernel.types import ToolSpec
+from agent_kernel.types import ToolResult, ToolSpec
 
 
 class FakeEvalToolbox(ToolPort):
@@ -30,10 +30,10 @@ class FakeEvalToolbox(ToolPort):
     def list_tools(self) -> list[ToolSpec]:
         return [ToolSpec(name, "eval fake tool") for name in self.results]
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         if name not in self.results:
             raise KeyError(name)
-        return self.results[name].replace("{ROOT}", PROJECT_ROOT.as_posix())
+        return ToolResult(content=self.results[name].replace("{ROOT}", PROJECT_ROOT.as_posix()))
 
 
 def load_tasks() -> list[dict]:

@@ -61,12 +61,13 @@ class PlanExecutePlanner(ReactPlanner):
         system = Message("system", PLAN_SYSTEM_TMPL.format(tools=tool_desc, memory=mem_block))
         prompt = self.context_builder.build(system, state, model)
         output = model.complete(prompt, tool_specs)
+        action, final_output = self._resolve(model, prompt, tool_specs, output)
 
-        plan = self._extract_plan(output.text)
+        plan = self._extract_plan(final_output.text)
         if plan:
             state.add("assistant", f"[计划] {plan}")
 
-        return self._parse(output.text)
+        return action
 
     @staticmethod
     def _extract_plan(text: str) -> str:

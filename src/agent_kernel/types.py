@@ -58,6 +58,9 @@ Action = Union[ToolCall, FinalAnswer]
 class ModelOutput:
     text: str
     usage: dict[str, int] = field(default_factory=dict)  # prompt/completion tokens
+    # 原生 tool calling：模型明确要求调用工具时非空，元素形如 {"name": ..., "args": {...}}。
+    # 为空时走 planner 的文本 JSON 解析兜底（未接原生 tool calling 的 adapter，如 FakeScriptedModel）。
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -86,6 +89,23 @@ class Effect:
 
 def hash_arguments(args: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+@dataclass
+class ArtifactRef:
+    """工具结果里指向外置产物（如 OffloadingToolbox 落盘的文件）的引用。"""
+
+    uri: str
+    mime_type: str = "text/plain"
+    description: str = ""
+
+
+@dataclass
+class ToolResult:
+    """工具调用结果：content 是回灌给模型的文本，artifacts 是附带的结构化产物引用。"""
+
+    content: str
+    artifacts: list[ArtifactRef] = field(default_factory=list)
 
 
 @dataclass

@@ -14,7 +14,7 @@ from datetime import timedelta
 from typing import Any
 
 from ..ports import ToolPort
-from ..types import ToolSpec
+from ..types import ToolResult, ToolSpec
 
 Guard = Callable[[dict], None]
 
@@ -88,7 +88,7 @@ class McpToolbox(ToolPort):
         self._require_started()
         return list(self._tools)
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         self._require_started()
         if name not in self.allow:
             raise PermissionError(f"工具未在白名单中: {name}")
@@ -98,7 +98,7 @@ class McpToolbox(ToolPort):
             guard(args)
         future: Future[str] = Future()
         self._requests.put(("call", (name, args), future))
-        return future.result()
+        return ToolResult(content=future.result())
 
     def _require_started(self) -> None:
         if self._thread is None or not self._thread.is_alive():

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from ..ports import ToolPort
-from ..types import ToolSpec
+from ..types import ToolResult, ToolSpec
 
 
 class LangChainToolbox(ToolPort):
@@ -37,8 +37,9 @@ class LangChainToolbox(ToolPort):
             specs.append(ToolSpec(tool.name, tool.description or "", parameters))
         return specs
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         if name not in self._tools:
             raise KeyError(f"未知工具: {name}")
         result = self._tools[name].invoke(args)
-        return result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+        text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+        return ToolResult(content=text)

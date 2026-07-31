@@ -21,7 +21,15 @@ from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.kernel import AgentKernel, EffectUnresolvedError
 from agent_kernel.ports import ModelPort, ToolPort
 from agent_kernel.planners.react import ReactPlanner
-from agent_kernel.types import Message, ModelOutput, RetryPolicy, RunState, ToolEffectPolicy, ToolSpec
+from agent_kernel.types import (
+    Message,
+    ModelOutput,
+    RetryPolicy,
+    RunState,
+    ToolEffectPolicy,
+    ToolResult,
+    ToolSpec,
+)
 
 
 class FakeModel(ModelPort):
@@ -49,12 +57,12 @@ class CrashingCounterTool(ToolPort):
     def list_tools(self) -> list[ToolSpec]:
         return [ToolSpec("send", "有副作用的操作", {}, effect_policy=self.effect_policy)]
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         self.counter.append(len(self.counter) + 1)
         if self._crash_pending:
             self._crash_pending = False
             raise SystemExit("模拟进程崩溃：副作用已发生，尚未确认")
-        return f"sent-{len(self.counter)}"
+        return ToolResult(content=f"sent-{len(self.counter)}")
 
 
 TOOL_CALL_SCRIPT = json.dumps({"thought": "发送", "tool": "send", "args": {"to": "a@b.com"}})
@@ -86,7 +94,7 @@ def scenario_executing_not_idempotent() -> dict:
         ledger1.close()
 
         inspect_ledger = SqliteEffectLedger(ledger_path)
-        effect_after_crash = inspect_ledger.get("scn-1:1")
+        effect_after_crash = inspect_ledger.get("scn-1:1:1")
         inspect_ledger.close()
 
         store2 = JsonCheckpointStore(ckpt_path)
@@ -113,7 +121,7 @@ def scenario_executing_not_idempotent() -> dict:
             and effect_after_crash.status == "executing"
             and effect_after_crash.attempt == 1
             and raised is not None
-            and raised.effect_id == "scn-1:1"
+            and raised.effect_id == "scn-1:1:1"
             and raised.status == "executing"
             and counter == [1]  # 没有被重复执行
         )
@@ -162,7 +170,7 @@ def scenario_executing_idempotent_retry() -> dict:
             max_steps=4,
         )
         final_state = kernel2.resume(state)
-        effect_final = ledger2.get("scn-2:1")
+        effect_final = ledger2.get("scn-2:1:1")
         ledger2.close()
 
         ok = (
@@ -219,7 +227,7 @@ def scenario_succeeded_replay() -> dict:
         real_ledger.close()
 
         inspect_ledger = SqliteEffectLedger(ledger_path)
-        effect_after_crash = inspect_ledger.get("scn-3:1")
+        effect_after_crash = inspect_ledger.get("scn-3:1:1")
         inspect_ledger.close()
         checkpoint_after_crash = JsonCheckpointStore(ckpt_path).load("scn-3")
 

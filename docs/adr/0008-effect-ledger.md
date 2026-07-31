@@ -78,3 +78,19 @@ offline`/`run_observability_real.py`/`run_langgraph_real.py`/
 `run_worker_real.py`/`examples/demo_ops.py`/`record_demos.py --check`/
 `compileall`/`check_core_imports.py`）在 `effects=None` 下全部通过，结果与
 改动前一致。
+
+## 勘误（2026-07-31）
+
+上面「决策」第 11 条写的 `effect_id = f"{run_id}:{step}"` 有真实 bug：多轮
+对话场景下 `AgentKernel.run()` 二次调用会把 `RunState.step` 清零重新计数
+（见 `kernel.py` 的 `run()`），但 `run_id` 不变——于是第二轮第一步工具调用
+生成的 `effect_id` 会跟第一轮第一步撞车，命中账本里 `succeeded` 记录后直接
+把第一轮的结果回放给第二轮参数完全不同的调用，是数据错误级问题，不是本
+ADR 讨论过的"极窄崩溃窗口"那类已知边界。
+
+修复：`effect_id` 改为 `f"{run_id}:{turn}:{step}"`；并在 `_run_pending_tool` 命中账本记录时新增
+`arguments_hash` 校验——跟本次调用的哈希对不上就抛新增的
+`EffectArgumentMismatchError`，拒绝回放/重试，而不是本 ADR 原先假设的
+"同一个 effect_id 一定对应同一次调用"。回归测试见
+`tests/test_effects.py::test_effect_id_scoped_by_turn_not_just_step` /
+`test_argument_hash_mismatch_raises`。

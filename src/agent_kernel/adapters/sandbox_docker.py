@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 from ..ports import ToolPort
-from ..types import ToolSpec
+from ..types import ToolResult, ToolSpec
 
 DEFAULT_IMAGE = "python:3.11.14-slim-bookworm"
 MAX_CAPTURE_CHARS = 4096
@@ -128,7 +128,7 @@ class SandboxToolbox(ToolPort):
     def list_tools(self) -> list[ToolSpec]:
         return [self._SPEC]
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         if name != self.TOOL_NAME:
             raise KeyError(f"未知工具: {name}")
-        return self.sandbox.execute(str(args.get("code", "")))
+        return ToolResult(content=self.sandbox.execute(str(args.get("code", ""))))

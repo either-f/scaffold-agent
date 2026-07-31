@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from ..ports import ToolPort
-from ..types import ToolSpec
+from ..types import ArtifactRef, ToolResult, ToolSpec
 
 
 class OffloadingToolbox(ToolPort):
@@ -27,27 +27,32 @@ class OffloadingToolbox(ToolPort):
     def list_tools(self) -> list[ToolSpec]:
         return self.tools.list_tools()
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         result = self.tools.call(name, args)
-        if len(result) <= self.max_inline_chars:
+        content = result.content
+        if len(content) <= self.max_inline_chars:
             return result
 
-        digest = hashlib.sha256(result.encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
         path = (self.artifact_dir / f"{digest}.txt").resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists():
             tmp = path.with_suffix(".txt.tmp")
             try:
-                tmp.write_text(result, encoding="utf-8")
+                tmp.write_text(content, encoding="utf-8")
                 os.replace(tmp, path)
             finally:
                 tmp.unlink(missing_ok=True)
 
-        head = result[: self.preview_chars]
-        tail = result[-self.preview_chars :] if self.preview_chars else ""
-        return (
+        head = content[: self.preview_chars]
+        tail = content[-self.preview_chars :] if self.preview_chars else ""
+        preview = (
             f"[offloaded] 完整工具结果: {path}\n"
-            f"字符数: {len(result)}\n"
+            f"字符数: {len(content)}\n"
             f"开头预览:\n{head}\n"
             f"结尾预览:\n{tail}"
+        )
+        return ToolResult(
+            content=preview,
+            artifacts=[*result.artifacts, ArtifactRef(uri=str(path), description=f"{name} 完整结果")],
         )

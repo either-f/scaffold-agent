@@ -18,7 +18,7 @@ from agent_kernel.fork import fork
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.ports import ModelPort, ToolPort
-from agent_kernel.types import Message, ModelOutput, RunState, ToolSpec
+from agent_kernel.types import Message, ModelOutput, RunState, ToolResult, ToolSpec
 
 TOOL_CALL_SCRIPT = json.dumps({"thought": "发送通知", "tool": "notify", "args": {"to": "ops"}})
 
@@ -50,9 +50,9 @@ class CountingTool(ToolPort):
     def list_tools(self) -> list[ToolSpec]:
         return [ToolSpec("notify", "发送通知", {})]
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         self.counter.append(len(self.counter) + 1)
-        return f"notified-{len(self.counter)}"
+        return ToolResult(content=f"notified-{len(self.counter)}")
 
 
 def crash_approval(_call) -> bool:

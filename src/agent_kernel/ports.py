@@ -8,7 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from .types import Action, Effect, Message, ModelOutput, RunState, ToolSpec
+from .types import Action, Effect, Message, ModelOutput, RunState, ToolResult, ToolSpec
 
 
 class ModelPort(ABC):
@@ -25,7 +25,7 @@ class ToolPort(ABC):
     def list_tools(self) -> list[ToolSpec]: ...
 
     @abstractmethod
-    def call(self, name: str, args: dict) -> str: ...
+    def call(self, name: str, args: dict) -> ToolResult: ...
 
 
 class MemoryPort(ABC):

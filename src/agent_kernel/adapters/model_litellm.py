@@ -25,15 +25,23 @@ class LiteLLMModel(ModelPort):
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> ModelOutput:
         import litellm
 
+        kwargs = dict(self.kwargs)
+        if tools:
+            kwargs["tools"] = [_to_litellm_tool(t) for t in tools]
+
         resp = litellm.completion(
             model=self.model,
             messages=[{"role": m.role if m.role != "tool" else "user", "content": m.content} for m in messages],
-            **self.kwargs,
+            **kwargs,
         )
         choice = resp.choices[0].message
         content = choice.get("content") if isinstance(choice, dict) else choice.content
+        raw_tool_calls = choice.get("tool_calls") if isinstance(choice, dict) else choice.tool_calls
+        tool_calls = [_parse_tool_call(tc) for tc in raw_tool_calls] if raw_tool_calls else []
+        if content is None and not tool_calls:
+            raise ValueError("模型既未返回内容也未返回 tool_calls")
         if content is None:
-            raise ValueError("模型返回空内容")
+            content = ""
         if not isinstance(content, str):
             content = json.dumps(content, ensure_ascii=False)
         usage = getattr(resp, "usage", None)
@@ -49,4 +57,27 @@ class LiteLLMModel(ModelPort):
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
             },
+            tool_calls=tool_calls,
         )
+
+
+def _to_litellm_tool(spec: ToolSpec) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": spec.name,
+            "description": spec.description,
+            "parameters": spec.parameters or {"type": "object", "properties": {}},
+        },
+    }
+
+
+def _parse_tool_call(tc) -> dict:
+    function = tc.get("function") if isinstance(tc, dict) else tc.function
+    name = function.get("name") if isinstance(function, dict) else function.name
+    raw_args = function.get("arguments") if isinstance(function, dict) else function.arguments
+    try:
+        args = json.loads(raw_args) if raw_args else {}
+    except json.JSONDecodeError:
+        args = {}
+    return {"name": name, "args": args}

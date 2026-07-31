@@ -10,7 +10,7 @@ import operator
 from typing import Callable
 
 from ..ports import ToolPort
-from ..types import ToolSpec
+from ..types import ToolResult, ToolSpec
 
 
 class LocalToolbox(ToolPort):
@@ -25,10 +25,10 @@ class LocalToolbox(ToolPort):
     def list_tools(self) -> list[ToolSpec]:
         return list(self._specs.values())
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         if name not in self._fns:
             raise KeyError(f"未知工具: {name}")
-        return str(self._fns[name](**args))
+        return ToolResult(content=str(self._fns[name](**args)))
 
 
 # --------------------------------------------------------------- demo tools

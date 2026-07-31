@@ -120,8 +120,9 @@ def run_context() -> dict:
         artifact = artifact_dir / f"{hashlib.sha256(raw.encode('utf-8')).hexdigest()}.txt"
         artifact_ok = (
             artifact.read_text(encoding="utf-8") == raw
-            and str(artifact.resolve()) in offloaded
-            and f"字符数: {len(raw)}" in offloaded
+            and str(artifact.resolve()) in offloaded.content
+            and f"字符数: {len(raw)}" in offloaded.content
+            and any(a.uri == str(artifact.resolve()) for a in offloaded.artifacts)
         )
 
         max_chars = max(model.prompt_chars)

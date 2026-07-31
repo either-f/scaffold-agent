@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from ..ports import SkillLoaderPort, ToolPort
-from ..types import ToolSpec
+from ..types import ToolResult, ToolSpec
 
 LOAD_TOOL_NAME = "load_skill"
 
@@ -43,7 +43,7 @@ class SkillToolbox(ToolPort):
         )
         return [*self._inner.list_tools(), load_spec]
 
-    def call(self, name: str, args: dict) -> str:
+    def call(self, name: str, args: dict) -> ToolResult:
         if name != LOAD_TOOL_NAME:
             return self._inner.call(name, args)
         skill_name = str(args.get("name", ""))
@@ -51,4 +51,4 @@ class SkillToolbox(ToolPort):
         known = {s.name for s in self._loader.list_skills()}
         if skill_name not in known:
             raise KeyError(f"未知技能: {skill_name}")
-        return self._loader.load(skill_name)
+        return ToolResult(content=self._loader.load(skill_name))

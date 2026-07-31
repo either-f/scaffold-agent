@@ -428,9 +428,54 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 
 演示回放与简历要点见 [docs/demos/](docs/demos/) 和 [docs/resume-bullets.md](docs/resume-bullets.md)。
 
+## 可靠性与协议修复（2026-07-31）
+
+一轮问题排查发现并修复了 4 处真实缺陷/缺口，全部有回归测试或 eval 覆盖：
+
+- **Effect ID 跨轮冲突（严重）**：`effect_id` 之前是 `run_id:step`；多轮对话
+  (`kernel.run()` 二次调用) 会把 `step` 清零重新计数，导致第二轮的 `effect_id`
+  跟第一轮撞车——命中账本里第一轮的 `succeeded` 记录后，内核会直接把第一轮的
+  结果回放给第二轮一个参数完全不同的工具调用。现改为 `run_id:turn:step`，并在
+  回放/重试前校验账本里的 `arguments_hash` 是否跟本次调用一致，对不上直接抛
+  `EffectArgumentMismatchError`（新错误类，`kernel.py`），拒绝用错的结果。
+  见 `tests/test_effects.py::test_effect_id_scoped_by_turn_not_just_step` /
+  `test_argument_hash_mismatch_raises`。
+- **JSON 动作解析从"宽容降级"改成"重试一次再抛错"**：`ReactPlanner._parse()`
+  之前解析失败会把模型的原始文本直接当成 `final` 答案静默返回给用户——模型
+  输出格式错乱时用户会看到一段不知所云的答案，且没有任何信号表明出了问题。
+  现在解析失败会用一条纠错提示追加喂回模型重试一次，仍失败则抛
+  `ActionParseError`（`planners/react.py`），调用方能感知到失败，不会误把
+  垃圾文本当答案。`plan_execute.py` 复用同一条路径。见 `tests/test_planners.py`。
+- **原生 tool calling**：`ModelPort.complete()` 早就接收 `tools: list[ToolSpec]`
+  参数，但 `LiteLLMModel` 一直没把它传给 `litellm.completion()`——模型只能靠
+  提示词里的 JSON 格式说明"模拟"工具调用。现在有工具时会翻译成 OpenAI 风格的
+  `tools=[...]` schema 传下去，响应里的 `tool_calls` 会被解析进新增的
+  `ModelOutput.tool_calls` 字段，planner 优先采用（跳过文本 JSON 解析）。
+  已在真实 DeepSeek 链路（`evals/run_worker_real.py`）验证走通；ponytail 边界：
+  一步只取第一个 `tool_call`，暂不支持模型并行发起多个工具调用。见
+  `tests/test_model_litellm.py`（monkeypatch，不打真实网络）。
+- **`ToolPort.call()` 从只能返回 `str` 改成返回 `ToolResult`**：新增
+  `ToolResult(content, artifacts)` 和 `ArtifactRef(uri, mime_type, description)`
+  （`types.py`）。所有内置 toolbox（local/mcp/langchain/offload/skills/agents/
+  sandbox）同步改造；`OffloadingToolbox` 落盘的长结果现在会正确挂一个
+  `ArtifactRef` 而不是只在文本里拼路径字符串。effect ledger 与消息历史仍只落
+  文本（`result.content` + artifact 行拼接），回放场景不恢复结构化 artifacts——
+  ponytail 边界，见 `kernel.py::_finish_tool` 注释。见 `tests/test_tool_result.py`。
+
+测试套件此前被移除（`9f3046b chore: remove test suite`），本轮在 `tests/` 下
+用 pytest 重建，覆盖状态机（`run`/`resume` 合法与非法状态迁移、多轮 turn/step
+语义）、effect ledger（跨轮冲突、参数哈希校验、三种崩溃恢复场景）、planner
+解析重试、ToolResult：
+
+```powershell
+.tools\uv\Scripts\uv.exe sync  # 首次需要装 dev 依赖组（pytest）
+.venv\Scripts\python.exe -m pytest tests/ -q
+```
+
 ## 回归门禁
 
 ```powershell
+.venv\Scripts\python.exe -m pytest tests/ -q
 .venv\Scripts\python.exe evals\run_eval.py --mode offline
 .venv\Scripts\python.exe evals\run_m3.py context
 .venv\Scripts\python.exe evals\run_m5.py
