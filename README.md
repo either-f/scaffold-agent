@@ -121,6 +121,79 @@ ToolSpec("send_email", "...", {}, effect_policy=ToolEffectPolicy(
 幂等工具安全自动重试、已成功但 checkpoint 未落盘时正确回放而非重复执行。见
 [evals/baseline-effects.json](evals/baseline-effects.json)。
 
+## 事件溯源：EventStore + reduce()
+
+`EventBus` 之前只是旁路通知（观测/成本/审计各订各的，互不影响主循环）。
+`adapters/event_store.py` 的 `SqliteEventStore` 把事件持久化成可查询的账本，
+`event_sourcing.py` 的 `reduce()` 能从事件流重建出等价的 `RunState`——不重命名
+任何现有事件，只在 9 个状态变更点新增同名新事件（`run.started`/`tool.proposed`/
+`run.paused`/`tool.approved`/`tool.started`/`tool.completed`/`run.resumed`/
+`run.completed`/`run.failed`），跟现有事件并存。
+
+```python
+from agent_kernel.adapters.event_store import SqliteEventStore
+from agent_kernel.event_sourcing import reduce
+
+store = SqliteEventStore("runs/events.db")
+bus = EventBus()
+bus.subscribe("*", store.handler())
+kernel = AgentKernel(model=model, tools=tools, planner=planner, bus=bus, ...)
+
+# 事故分析/审计/eval 重放：
+events = store.load_events(run_id)
+rebuilt_state = reduce(events)
+```
+
+- `SqliteEventStore` 是 `EventBus` 的普通订阅者，不是 port——继承
+  `EventBus.publish` 现有的 `except Exception: pass`，**best-effort，不是
+  exactly-once**；`resume()` 的权威数据源仍然是 `CheckpointStore`，不是事件
+  账本，这是"加法"路线的核心边界（详见 [ADR-0009](docs/adr/0009-event-sourcing-and-fork.md)）。
+- `reduce()` 重建不出 `context_summary`/`summarized_message_count`（`ContextBuilder`
+  改的，不在内核状态变更点里）。
+- `kernel.py` 新增的 9 处 `_emit` 在没有订阅者时就是几次哈希查找，零开销，
+  不影响任何既有行为。
+
+```powershell
+.venv\Scripts\python.exe evals\run_event_sourcing.py --output evals/baseline-event-sourcing.json
+```
+
+3 个场景（批准/拒绝/步数耗尽）验证 `reduce(store.load_events(run_id))` 与真实
+`checkpoints.load(run_id)` 逐字段相等。见
+[evals/baseline-event-sourcing.json](evals/baseline-event-sourcing.json)。
+
+## Fork：从历史 checkpoint 分支执行
+
+`JsonCheckpointStore` 本来就给每个 `(turn, step)` 存一份快照文件
+（`turn_NNN_step_NNN.json`），`fork()`（`src/agent_kernel/fork.py`）直接建在
+这上面，**不依赖事件溯源**：读一份历史快照、深拷贝、换新 `run_id`，`kernel.py`
+零改动——fork 出来的 `RunState` 交给现有 `AgentKernel(...).resume()` 就能继续跑。
+
+```python
+from agent_kernel.fork import fork
+
+forked = fork(store, source_run_id="deploy-run", checkpoint="turn_1_step_1",
+              new_run_id="deploy-approve")
+
+# "批准 vs 拒绝"两条分支：同一个 fork 点，交给两个不同 approval 回调的内核
+AgentKernel(model=model, tools=tools, planner=planner, checkpoints=store,
+            approval=lambda call: True).resume(forked)
+```
+
+没有做用户最初设想的 `state_patch={"approved": False}` 参数——`RunState` 没有
+`approved` 字段，通用任意字段 patch 有把状态改出内部不一致的风险；"批准 vs
+拒绝"两条分支用两个不同 `approval` 回调各自 `resume()` 同一个 fork 点，零新增
+接口面就能达到一样的效果。
+
+```powershell
+.venv\Scripts\python.exe examples\demo_fork.py
+.venv\Scripts\python.exe evals\run_fork.py --output evals/baseline-fork.json
+```
+
+demo 用真实崩溃模拟（`approval` 回调 `raise SystemExit`）跑到"待审批、还没决定"
+的 fork 点，然后并排跑批准/拒绝两条分支，打印真实分叉的结果（不是两套写死的
+脚本——两条分支用同一份"回显最后一条真实消息"的模型代码，答案不同是因为状态
+真的不同）。见 [evals/baseline-fork.json](evals/baseline-fork.json)。
+
 ## M3A：PostgreSQL + pgvector 语义记忆
 
 启动项目固定版本的 pgvector 数据库，并安装记忆依赖：
@@ -365,6 +438,8 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 .venv\Scripts\python.exe evals\run_preferences.py
 .venv\Scripts\python.exe evals\run_consolidation.py --mode offline
 .venv\Scripts\python.exe evals\run_effects.py
+.venv\Scripts\python.exe evals\run_event_sourcing.py
+.venv\Scripts\python.exe evals\run_fork.py
 .venv\Scripts\python.exe evals\run_observability_real.py  # 需要 --extra obs（真实 opentelemetry-sdk，非 mock）
 .venv\Scripts\python.exe evals\run_langgraph_real.py  # 需要 --extra langgraph（真实编译 StateGraph）
 .venv\Scripts\python.exe examples\record_demos.py --check

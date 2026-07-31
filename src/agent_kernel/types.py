@@ -97,6 +97,7 @@ class RunState:
     answer: str | None = None
     pending_tool: ToolCall | None = None
     pending_effect_id: str | None = None
+    forked_from: str | None = None  # "{source_run_id}@{checkpoint_label}"，非 fork 出来的为 None
     turn: int = 0
     context_summary: str = ""
     summarized_message_count: int = 0

@@ -1,0 +1,86 @@
+{
+  "generated_at": "2026-07-31T02:40:23.630956+00:00",
+  "suite": "event-sourcing",
+  "scenarios": [
+    {
+      "run_id": "es-approved",
+      "event_count": 14,
+      "event_types": [
+        "run.start",
+        "run.started",
+        "step.start",
+        "tool.before",
+        "tool.proposed",
+        "run.paused",
+        "tool.approval",
+        "tool.approved",
+        "tool.started",
+        "tool.after",
+        "tool.completed",
+        "step.start",
+        "run.completed",
+        "run.end"
+      ],
+      "final_status": "done",
+      "fields_match": true,
+      "ok": true,
+      "name": "tool_call_approved"
+    },
+    {
+      "run_id": "es-rejected",
+      "event_count": 13,
+      "event_types": [
+        "run.start",
+        "run.started",
+        "step.start",
+        "tool.before",
+        "tool.proposed",
+        "run.paused",
+        "tool.approval",
+        "tool.approved",
+        "tool.after",
+        "tool.completed",
+        "step.start",
+        "run.completed",
+        "run.end"
+      ],
+      "final_status": "done",
+      "fields_match": true,
+      "ok": true,
+      "name": "tool_call_rejected"
+    },
+    {
+      "run_id": "es-maxsteps",
+      "event_count": 22,
+      "event_types": [
+        "run.start",
+        "run.started",
+        "step.start",
+        "tool.before",
+        "tool.proposed",
+        "run.paused",
+        "tool.approval",
+        "tool.approved",
+        "tool.started",
+        "tool.after",
+        "tool.completed",
+        "step.start",
+        "tool.before",
+        "tool.proposed",
+        "run.paused",
+        "tool.approval",
+        "tool.approved",
+        "tool.started",
+        "tool.after",
+        "tool.completed",
+        "run.failed",
+        "run.end"
+      ],
+      "final_status": "failed",
+      "fields_match": true,
+      "ok": true,
+      "name": "max_steps_exhausted"
+    }
+  ],
+  "ok": true
+}

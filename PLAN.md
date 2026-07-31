@@ -200,6 +200,25 @@ agent-kernel/
   回归确认 `effects=None` 时所有既有 eval/demo 结果不变。详见
   [ADR-0008](docs/adr/0008-effect-ledger.md)。
 
+### 扩展：事件溯源与 Fork（2026-07-31）✅
+- 事件溯源：不改任何现有事件类型，`kernel.py` 9 个状态变更点新增同名新事件，
+  `adapters/event_store.py` 的 `SqliteEventStore`（纯 `EventBus` 订阅者，无
+  port）持久化，`event_sourcing.py` 的 `reduce()` 纯函数从事件流重建
+  `RunState`。`resume()` 权威数据源仍是 `CheckpointStore`，事件账本是
+  best-effort 审计/重放能力，不是加法路线要拆的东西。
+- Fork：建在 `JsonCheckpointStore` 已有的逐 `(turn,step)` 快照文件上，不依赖
+  事件溯源；`fork()`（`src/agent_kernel/fork.py`）读历史快照+深拷贝+换新
+  run_id，`kernel.py` 零改动。没做用户原句的 `state_patch` 参数——"批准 vs
+  拒绝"分支效果改用两个不同 `approval` 回调的内核实例各自 resume 同一个
+  fork 点达到，零新增接口面。
+- 验收：`evals/run_event_sourcing.py`（3 场景，`reduce()` 结果与真实
+  checkpoint 逐字段相等）、`evals/run_fork.py`（`SystemExit` 模拟崩溃拿到
+  fork 点，批准分支工具真执行、拒绝分支工具未执行、两分支答案不同、源 run
+  checkpoint 全程未变）、`examples/demo_fork.py`（可运行 demo，非确定性录制，
+  因为需要真实临时目录路径，跟 `record_demos.py` 的字节级 diff 系统不兼容）。
+  全量回归确认新增的 9 个 `_emit` 零行为影响。详见
+  [ADR-0009](docs/adr/0009-event-sourcing-and-fork.md)。
+
 ### M4 Skill 与沙箱（3–4 天）✅（离线验收）
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
 - 验收：新增一个技能 = 只放一个文件夹；沙箱内代码无法访问宿主敏感路径。

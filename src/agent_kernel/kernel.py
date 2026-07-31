@@ -84,6 +84,7 @@ class AgentKernel:
         if self.memory:
             self.memory.add(state.run_id, "user", user_input)
         self._emit("run.start", run_id=state.run_id, input=user_input)
+        self._emit("run.started", run_id=state.run_id, turn=state.turn, input=user_input)
         self._checkpoint(state)
         return self._drive(state)
 
@@ -99,6 +100,7 @@ class AgentKernel:
         if state.turn == 0:  # 兼容 M2 checkpoint
             state.turn = 1
         self._emit("run.resume", run_id=state.run_id, step=state.step, status=state.status)
+        self._emit("run.resumed", run_id=state.run_id, step=state.step, status=state.status)
         return self._drive(state)
 
     def _drive(self, state: RunState) -> RunState:
@@ -109,6 +111,7 @@ class AgentKernel:
             if state.step >= self.max_steps:
                 state.status = "failed"
                 state.answer = "已达最大步数限制。"
+                self._emit("run.failed", run_id=state.run_id, step=state.step, answer=state.answer)
                 self._checkpoint(state)
                 break
             state.step += 1
@@ -122,9 +125,11 @@ class AgentKernel:
                 state.add("assistant", action.content)
                 if self.memory:
                     self.memory.add(state.run_id, "assistant", action.content)
+                self._emit("run.completed", run_id=state.run_id, step=state.step, answer=action.content)
             elif isinstance(action, ToolCall):
                 self._emit("tool.before", run_id=state.run_id, tool=action.name, args=action.args)
                 state.pending_tool = action
+                effect_id = None
                 if self.effects:
                     effect_id = f"{state.run_id}:{state.step}"
                     state.pending_effect_id = effect_id
@@ -137,7 +142,18 @@ class AgentKernel:
                             idempotency_key=f"effect:{effect_id}",
                         )
                     )
+                self._emit(
+                    "tool.proposed",
+                    run_id=state.run_id,
+                    step=state.step,
+                    tool=action.name,
+                    args=action.args,
+                    thought=action.thought,
+                    effect_id=effect_id,
+                )
                 state.status = "paused" if self.approval else "running"
+                if state.status == "paused":
+                    self._emit("run.paused", run_id=state.run_id, step=state.step)
 
             self._checkpoint(state)
 
@@ -182,6 +198,9 @@ class AgentKernel:
                 args=action.args,
                 approved=approved,
             )
+            self._emit(
+                "tool.approved", run_id=state.run_id, step=state.step, tool=action.name, approved=approved
+            )
             state.status = "running"
             if not approved:
                 self._finish_tool(state, action, f"[HITL] 用户否决了工具调用 {action.name}。")
@@ -194,6 +213,7 @@ class AgentKernel:
         self._finish_tool(state, action, result)
 
     def _execute_tool(self, state: RunState, action: ToolCall) -> str:
+        self._emit("tool.started", run_id=state.run_id, step=state.step, tool=action.name, args=action.args)
         if self.effects and state.pending_effect_id:
             self.effects.mark_executing(state.pending_effect_id)
         try:
@@ -212,16 +232,23 @@ class AgentKernel:
 
     def _finish_tool(self, state: RunState, action: ToolCall, result: str) -> None:
         self._emit("tool.after", run_id=state.run_id, tool=action.name, result=result)
-        state.add(
-            "assistant",
-            json.dumps(
-                {"thought": action.thought, "tool": action.name, "args": action.args},
-                ensure_ascii=False,
-            ),
+        assistant_message = json.dumps(
+            {"thought": action.thought, "tool": action.name, "args": action.args},
+            ensure_ascii=False,
         )
+        state.add("assistant", assistant_message)
         state.add("tool", result, name=action.name)
         if self.memory:
             self.memory.add(state.run_id, "tool", f"{action.name}: {result}")
         state.pending_tool = None
         state.pending_effect_id = None
+        self._emit(
+            "tool.completed",
+            run_id=state.run_id,
+            step=state.step,
+            tool=action.name,
+            args=action.args,
+            result=result,
+            assistant_message=assistant_message,
+        )
         self._checkpoint(state)

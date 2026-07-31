@@ -1,0 +1,21 @@
+{
+  "crashed": true,
+  "fork_point_matches": true,
+  "branch_a": {
+    "status": "done",
+    "answer": "结果: notified-1",
+    "counter": [
+      1
+    ]
+  },
+  "branch_b": {
+    "status": "done",
+    "answer": "结果: [HITL] 用户否决了工具调用 notify。",
+    "counter": []
+  },
+  "diverged": true,
+  "source_untouched": true,
+  "ok": true,
+  "generated_at": "2026-07-31T02:42:37.910175+00:00",
+  "suite": "fork"
+}

@@ -30,6 +30,13 @@ class JsonCheckpointStore(CheckpointStore):
             return None
         return RunState.from_dict(json.loads(latest.read_text(encoding="utf-8")))
 
+    def load_step(self, run_id: str, turn: int, step: int) -> RunState | None:
+        """读任意历史 (turn, step) 快照，不止 latest.json。给 fork() 用（ADR-0009）。"""
+        path = self.root / run_id / f"turn_{turn:03d}_step_{step:03d}.json"
+        if not path.exists():
+            return None
+        return RunState.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
     @staticmethod
     def _atomic_write(path: Path, data: str) -> None:
         tmp = path.with_suffix(path.suffix + ".tmp")
