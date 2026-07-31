@@ -150,6 +150,32 @@ planner = ReactPlanner(preferences=preferences)
 .venv\Scripts\python.exe evals\run_preferences.py
 ```
 
+## 离线记忆巩固
+
+独立离线脚本 `evals/run_consolidation.py`：读 `CheckpointStore` 里的短期情景记忆
+（`RunState.messages` 完整时序，M3B 已落地），用 LLM 抽取事实与偏好，分别写入长期语义
+记忆和 `namespace="preferences"` 偏好记忆——去重、合并、提取事实、修正错误，模拟
+"闲时整理记忆"。只通过 `MemoryPort.add/search` 读写，不侵入运行时内核；`CheckpointStore`
+只读。
+
+```powershell
+# 离线逻辑校验（Fake 模型 + 内存字典，CI 用）
+.venv\Scripts\python.exe evals\run_consolidation.py --mode offline
+
+# 真实链路：真实 DeepSeek 对话生成 checkpoint → 真实 DeepSeek 抽取 → 真实 pgvector 写入/检索
+$env:DEEPSEEK_API_KEY = "你的密钥"
+$env:DASHSCOPE_API_KEY = "你的密钥"
+$env:AGENT_MEMORY_DSN = "postgresql://agent:agent@127.0.0.1:5432/agent_memory"
+.venv\Scripts\python.exe evals\run_consolidation.py --mode real --output evals/baseline-consolidation-real.json
+```
+
+真实基线（2026-07-31）：2 个 run 全部处理，事实与偏好各抽取 1 条，写入后能被真实语义检索
+命中，见 [evals/baseline-consolidation-real.json](evals/baseline-consolidation-real.json)。
+
+坦诚声明：MemoryPort 首版不提供 update/delete（ADR-0004），"修正错误"做不到覆盖旧记录，
+只是让抽取 prompt 只输出修正后的最新结论、不重复写入过时旧结论；各 adapter 检索按时间
+倒序，新结论排在旧结论前面——这是"软修正"，不是真删除。
+
 ## M4：Skill 与沙箱
 
 渐进式技能系统采用 Anthropic Agent Skills 规范（SKILL.md + 渐进披露）。技能工具
@@ -233,6 +259,7 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 .venv\Scripts\python.exe evals\run_m3.py context
 .venv\Scripts\python.exe evals\run_m5.py
 .venv\Scripts\python.exe evals\run_preferences.py
+.venv\Scripts\python.exe evals\run_consolidation.py --mode offline
 .venv\Scripts\python.exe examples\record_demos.py --check
 .venv\Scripts\python.exe -m compileall -q src examples evals
 ```

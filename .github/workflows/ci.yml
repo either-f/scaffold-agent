@@ -17,6 +17,7 @@ jobs:
       - run: python evals/run_m3.py context
       - run: python evals/run_m5.py
       - run: python evals/run_preferences.py
+      - run: python evals/run_consolidation.py --mode offline
       - run: python examples/record_demos.py --check
       - run: python -m compileall -q src examples evals
       - name: "kernel: no third-party imports"

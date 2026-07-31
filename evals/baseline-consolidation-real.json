@@ -1,0 +1,10 @@
+{
+  "generated_at": "2026-07-31T00:57:06.951226+00:00",
+  "suite": "consolidation-real",
+  "runs_processed": 2,
+  "total_facts": 1,
+  "total_preferences": 1,
+  "fact_found": true,
+  "pref_found": true,
+  "ok": true
+}

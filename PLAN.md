@@ -140,9 +140,18 @@ agent-kernel/
 
 ### 扩展：偏好与约束记忆（2026-07-31）✅
 - `ReactPlanner` 新增可选 `preferences: MemoryPort`，固定 query 检索、每轮无条件注入 system prompt，
-  跟按当前输入相关性检索的常规记忆是两条独立路径。只做读取；自动提取偏好陈述写入
-  `namespace="preferences"` 留给后续的离线记忆巩固脚本。
+  跟按当前输入相关性检索的常规记忆是两条独立路径。
 - 验收：`evals/run_preferences.py`——偏好块不依赖当前 query 相关性注入；未配置时不产生多余内容；已入 CI。
+- 自动提取（读取偏好陈述写入 `namespace="preferences"`）已由下面的离线记忆巩固脚本补上。
+
+### 扩展：离线记忆巩固（2026-07-31）✅
+- `evals/run_consolidation.py`：读 `CheckpointStore` 的短期情景记忆（`RunState.messages`），
+  LLM 抽取事实与偏好，分别写入长期语义记忆与 `namespace="preferences"`；去重靠各
+  MemoryPort 已有的 content-hash 唯一约束，不重复实现；"修正错误"是软修正（新结论排在
+  旧结论前面），不做真删除，因为 MemoryPort 首版不提供 update/delete（ADR-0004）。
+- 验收：offline 模式（Fake 模型 + 内存字典）3 个 run 全过，含空 run 跳过、无跨命名空间
+  污染；real 模式用真实 DeepSeek 生成对话 + 抽取 + 真实 pgvector 写入检索，2/2 run 处理，
+  事实与偏好各命中，见 [evals/baseline-consolidation-real.json](evals/baseline-consolidation-real.json)。
 
 ### M4 Skill 与沙箱（3–4 天）✅（离线验收）
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
