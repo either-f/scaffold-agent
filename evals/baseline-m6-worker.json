@@ -1,0 +1,10 @@
+{
+  "generated_at": "2026-07-31T00:41:33.934695+00:00",
+  "suite": "worker_real",
+  "model": "deepseek/deepseek-chat",
+  "parent_status": "done",
+  "parent_steps": 2,
+  "answer": "123 * 456 = 56088",
+  "expected": "56088",
+  "ok": true
+}

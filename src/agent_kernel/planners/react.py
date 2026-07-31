@@ -24,13 +24,26 @@ SYSTEM_TMPL = """你是一个会使用工具的助手。可用工具：
 {memory}"""
 
 
+PREFERENCE_QUERY = "用户的语言习惯、格式要求、风格偏好、禁忌与约束"
+
+
 class ReactPlanner(PlannerPort):
     # 扩展点：子类（如 CodeActPlanner）替换 system 模板即可改变策略指令，
     # 工具描述组装、记忆检索、上下文构建、JSON 解析全部复用本类实现。
     system_template = SYSTEM_TMPL
 
-    def __init__(self, context_builder: ContextBuilder | None = None) -> None:
+    def __init__(
+        self,
+        context_builder: ContextBuilder | None = None,
+        preferences: MemoryPort | None = None,
+        preferences_k: int = 5,
+    ) -> None:
         self.context_builder = context_builder or ContextBuilder()
+        # 偏好记忆：独立 namespace 的 MemoryPort，每轮固定 query 检索、无条件注入，
+        # 不像下面的常规记忆那样依赖跟当前用户输入的相关性。
+        # ponytail: 写入（自动提取偏好陈述）留给离线巩固脚本做，这里只做读取注入。
+        self.preferences = preferences
+        self.preferences_k = preferences_k
 
     def step(
         self,
@@ -45,7 +58,12 @@ class ReactPlanner(PlannerPort):
             f"{json.dumps(t.parameters, ensure_ascii=False)}"
             for t in tool_specs
         ) or "(无)"
-        mem_block = ""
+
+        blocks: list[str] = []
+        if self.preferences:
+            prefs = self.preferences.search(PREFERENCE_QUERY, k=self.preferences_k)
+            if prefs:
+                blocks.append("已知偏好与约束（每轮都生效）：\n" + "\n".join(f"- {p}" for p in prefs))
         if memory and state.messages:
             query = next((m.content for m in reversed(state.messages) if m.role == "user"), "")
             current_context = {m.content for m in state.messages}
@@ -55,9 +73,11 @@ class ReactPlanner(PlannerPort):
                 else []
             )
             if hits:
-                mem_block = "相关记忆：\n" + "\n".join(f"- {h}" for h in hits)
+                blocks.append("相关记忆：\n" + "\n".join(f"- {h}" for h in hits))
 
-        system = Message("system", self.system_template.format(tools=tool_desc, memory=mem_block))
+        system = Message(
+            "system", self.system_template.format(tools=tool_desc, memory="\n".join(blocks))
+        )
         prompt = self.context_builder.build(system, state, model)
         output = model.complete(prompt, tool_specs)
         return self._parse(output.text)

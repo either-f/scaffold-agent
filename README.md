@@ -132,6 +132,24 @@ M3B 离线基线（2026-07-27）：50/50 轮完成，增量摘要 2 次，最大
 DeepSeek 会话成功从 pgvector 回答项目代号 `Mercury` 与中文偏好；完整结果见
 [evals/baseline-m3.json](evals/baseline-m3.json)。
 
+## 偏好与约束记忆
+
+`ReactPlanner` 支持一个独立于常规记忆的 `preferences: MemoryPort`：常规记忆按当前用户输入
+做相关性检索，偏好记忆固定查询"用户的语言习惯、格式要求、风格偏好、禁忌与约束"，
+每轮无条件注入 system prompt，不受当前问题是否相关影响。
+
+```python
+preferences = PgVectorMemory(dsn, namespace="preferences")
+planner = ReactPlanner(preferences=preferences)
+```
+
+只做读取注入；把偏好陈述自动识别并写入 `namespace="preferences"` 属于离线记忆巩固的范围，
+目前需要手动调用 `preferences.add(run_id, "user", "以后回复都用中文")` 写入。
+
+```powershell
+.venv\Scripts\python.exe evals\run_preferences.py
+```
+
 ## M4：Skill 与沙箱
 
 渐进式技能系统采用 Anthropic Agent Skills 规范（SKILL.md + 渐进披露）。技能工具
@@ -186,6 +204,16 @@ $env:UV_PROJECT_ENVIRONMENT = "$PWD\.venv"
 默认连接 `bolt://127.0.0.1:7687`，账号密码可用 `NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD`
 覆盖。详见 [ADR-0006](docs/adr/0006-graph-memory-neo4j.md)。
 
+Worker 委派的真实生产 LLM 验证（此前 demo 只用 FakeScriptedModel）：
+
+```powershell
+$env:DEEPSEEK_API_KEY = "你的密钥"
+.venv\Scripts\python.exe evals\run_worker_real.py --output evals/baseline-m6-worker.json
+```
+
+M6 真实基线（2026-07-31）：图记忆 8/8（真实 Neo4j，见 [evals/baseline-m6-graph.json](evals/baseline-m6-graph.json)），
+Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.json](evals/baseline-m6-worker.json)）。
+
 ## M7：Demo 录制与求职物料
 
 三个离线演示场景 + asciicast v2 录制器：
@@ -204,6 +232,7 @@ $env:UV_PROJECT_ENVIRONMENT = "$PWD\.venv"
 .venv\Scripts\python.exe evals\run_eval.py --mode offline
 .venv\Scripts\python.exe evals\run_m3.py context
 .venv\Scripts\python.exe evals\run_m5.py
+.venv\Scripts\python.exe evals\run_preferences.py
 .venv\Scripts\python.exe examples\record_demos.py --check
 .venv\Scripts\python.exe -m compileall -q src examples evals
 ```
@@ -227,7 +256,9 @@ $env:UV_PROJECT_ENVIRONMENT = "$PWD\.venv"
 - **观测**：OTel/Langfuse 导出器仅提供 adapter，无 self-host Langfuse 实时重放证据。
 - **LangGraph**：策略通过注入假图集成验证，未编译真实 StateGraph。
 - **A2A**：`A2AInteropAdapter` + `create_a2a_server` 为标准库 `http.server` 实现，非官方/完整 A2A SDK。
-- **Worker 委派**：真实进程内 AgentKernel 调用，但 demo 模型为 FakeScriptedModel，非生产 LLM。
+- ~~**Worker 委派**：demo 模型为 FakeScriptedModel，非生产 LLM。~~ 已解决（2026-07-31）：
+  `evals/run_worker_real.py` 用真实 DeepSeek 驱动父子两层 AgentKernel，通过。demo 本身
+  仍用 FakeScriptedModel 保持确定性录制，生产证据在 eval 里。
 
 完整规划见 [PLAN.md](PLAN.md)。
 

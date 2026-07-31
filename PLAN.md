@@ -138,6 +138,12 @@ agent-kernel/
 - M3B 已完成：同 run_id 多轮续聊、turn/step checkpoint、长工具结果外置与增量历史摘要。
 - 实测：50 轮离线对话最大 ReAct prompt 23,342 字符；DeepSeek 跨会话正确回忆 `Mercury` 与中文偏好。
 
+### 扩展：偏好与约束记忆（2026-07-31）✅
+- `ReactPlanner` 新增可选 `preferences: MemoryPort`，固定 query 检索、每轮无条件注入 system prompt，
+  跟按当前输入相关性检索的常规记忆是两条独立路径。只做读取；自动提取偏好陈述写入
+  `namespace="preferences"` 留给后续的离线记忆巩固脚本。
+- 验收：`evals/run_preferences.py`——偏好块不依赖当前 query 相关性注入；未配置时不产生多余内容；已入 CI。
+
 ### M4 Skill 与沙箱（3–4 天）✅（离线验收）
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
 - 验收：新增一个技能 = 只放一个文件夹；沙箱内代码无法访问宿主敏感路径。
