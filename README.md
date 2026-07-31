@@ -54,8 +54,9 @@ M1 真实链路现在会在 `runs/` 写入原子 checkpoint。启用逐工具 CL
 .tools\uv\Scripts\uv.exe run python examples/run_demo.py --m1 --resume RUN_ID --hitl
 ```
 
-恢复不会重复添加用户消息；待审批工具会先重新审批。工具执行采用 at-least-once：
-若外部工具已完成但结果尚未 checkpoint，恢复可能再次调用，因此自动重试只对只读工具开放。
+恢复不会重复添加用户消息；待审批工具会先重新审批。工具执行**不再是无条件
+at-least-once**——2026-07-31 起接入 [Effect Ledger](#effect-ledger工具副作用一致性)，
+未配置时行为不变，配置后能检测并拒绝对非幂等工具的重复调用。
 
 运行不需要密钥或网络的离线评测：
 
@@ -80,6 +81,45 @@ M2 基线（2026-07-27）：
 | 真实链路 | deepseek/deepseek-chat | 9/10 | 2.1 |
 
 真实逐题结果见 [evals/baseline-m2.json](evals/baseline-m2.json)。
+
+## Effect Ledger：工具副作用一致性
+
+checkpoint 只保证**状态**能恢复，不保证**副作用不重复**——工具调用成功后、
+checkpoint 落盘前进程崩溃，恢复会重新调用同一个工具（发邮件/建订单/转账都可能
+被执行两次）。`EffectLedger`（`adapters/effects.py` 的 `SqliteEffectLedger`）是
+第三个横切件，记录每次工具调用的 proposed→approved→executing→succeeded/failed
+状态；恢复时先查账本再决定回放结果、安全重试、还是拒绝重试：
+
+```python
+from agent_kernel.adapters.effects import SqliteEffectLedger
+from agent_kernel.types import RetryPolicy, ToolEffectPolicy, ToolSpec
+
+effects = SqliteEffectLedger("runs/effects.db")
+kernel = AgentKernel(model=model, tools=tools, planner=planner,
+                      checkpoints=checkpoints, effects=effects)
+
+# 工具自己声明是否幂等：
+ToolSpec("send_email", "...", {}, effect_policy=ToolEffectPolicy(
+    idempotent=False, retry_policy=RetryPolicy(max_attempts=1)))
+```
+
+- 已成功的工具调用：恢复时直接回放 `result_ref`，不重新执行。
+- 停在 `executing`/`failed` 且工具幂等（未超重试上限）：安全自动重试。
+- 停在 `executing`/`failed` 且工具非幂等：`resume()` 抛 `EffectUnresolvedError`，
+  拒绝自动重试，需要人工核实外部系统真实状态、手动改账本后再恢复。
+- `effects` 不传（默认 `None`）时行为跟改动前完全一致，未配置的 demo/eval 零影响。
+
+不做的事：跨进程 2PC/外部系统自动核对、`idempotency_key` 自动注入工具参数、
+指数退避——都在 [ADR-0008](docs/adr/0008-effect-ledger.md) 里写明为什么不做。
+
+```powershell
+.venv\Scripts\python.exe evals\run_effects.py --output evals/baseline-effects.json
+```
+
+三场景全部用真实崩溃模拟（`SystemExit` 逃出调用栈，两个独立 `AgentKernel` 实例
+共享磁盘上的 checkpoint+账本文件）验证：非幂等工具停在 executing 被拒绝重试、
+幂等工具安全自动重试、已成功但 checkpoint 未落盘时正确回放而非重复执行。见
+[evals/baseline-effects.json](evals/baseline-effects.json)。
 
 ## M3A：PostgreSQL + pgvector 语义记忆
 
@@ -324,6 +364,7 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 .venv\Scripts\python.exe evals\run_composite_memory.py
 .venv\Scripts\python.exe evals\run_preferences.py
 .venv\Scripts\python.exe evals\run_consolidation.py --mode offline
+.venv\Scripts\python.exe evals\run_effects.py
 .venv\Scripts\python.exe evals\run_observability_real.py  # 需要 --extra obs（真实 opentelemetry-sdk，非 mock）
 .venv\Scripts\python.exe evals\run_langgraph_real.py  # 需要 --extra langgraph（真实编译 StateGraph）
 .venv\Scripts\python.exe examples\record_demos.py --check

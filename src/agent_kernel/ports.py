@@ -8,7 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from .types import Action, Message, ModelOutput, RunState, ToolSpec
+from .types import Action, Effect, Message, ModelOutput, RunState, ToolSpec
 
 
 class ModelPort(ABC):
@@ -76,6 +76,29 @@ class CheckpointStore(ABC):
 
     @abstractmethod
     def load(self, run_id: str) -> RunState | None: ...
+
+
+class EffectLedger(ABC):
+    """横切件：工具副作用账本。恢复时先查这个再决定回放/重试/拒绝，
+    而不是无脑重新执行 pending_tool（见 ADR-0008）。"""
+
+    @abstractmethod
+    def propose(self, effect: Effect) -> None: ...
+
+    @abstractmethod
+    def mark_approved(self, effect_id: str) -> None: ...
+
+    @abstractmethod
+    def mark_executing(self, effect_id: str) -> None: ...  # 每次调用 attempt += 1
+
+    @abstractmethod
+    def mark_succeeded(self, effect_id: str, result_ref: str) -> None: ...
+
+    @abstractmethod
+    def mark_failed(self, effect_id: str, result_ref: str) -> None: ...
+
+    @abstractmethod
+    def get(self, effect_id: str) -> Effect | None: ...
 
 
 class InteropPort(ABC):

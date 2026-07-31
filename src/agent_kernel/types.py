@@ -1,10 +1,12 @@
 """内核核心类型。纯标准库，无第三方依赖。"""
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from typing import Any, Union
+from typing import Any, Literal, Union
 
 
 @dataclass
@@ -15,10 +17,25 @@ class Message:
 
 
 @dataclass
+class RetryPolicy:
+    max_attempts: int = 1  # 只做整数上限，不做退避/抖动
+
+
+@dataclass
+class ToolEffectPolicy:
+    read_only: bool = False
+    idempotent: bool = False
+    compensatable: bool = False  # 目前只记录，内核逻辑不读取
+    requires_approval: bool = False  # 目前只记录；审批仍由 AgentKernel.approval 是否配置决定
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+
+
+@dataclass
 class ToolSpec:
     name: str
     description: str
     parameters: dict[str, Any] = field(default_factory=dict)  # JSON Schema
+    effect_policy: ToolEffectPolicy | None = None
 
 
 @dataclass
@@ -50,6 +67,27 @@ class Event:
     ts: float = field(default_factory=time.time)
 
 
+EffectStatus = Literal["proposed", "approved", "executing", "succeeded", "failed", "unknown"]
+
+
+@dataclass
+class Effect:
+    """工具副作用账本条目。恢复时先查这个，而不是无脑重跑 pending_tool。"""
+
+    effect_id: str
+    run_id: str
+    tool_name: str
+    arguments_hash: str
+    status: EffectStatus = "proposed"
+    idempotency_key: str | None = None
+    result_ref: str | None = None
+    attempt: int = 0
+
+
+def hash_arguments(args: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(args, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 @dataclass
 class RunState:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
@@ -58,6 +96,7 @@ class RunState:
     status: str = "running"  # running | done | failed | paused
     answer: str | None = None
     pending_tool: ToolCall | None = None
+    pending_effect_id: str | None = None
     turn: int = 0
     context_summary: str = ""
     summarized_message_count: int = 0

@@ -11,10 +11,25 @@ import json
 from typing import Callable
 
 from .events import EventBus
-from .ports import CheckpointStore, MemoryPort, ModelPort, PlannerPort, ToolPort
-from .types import Event, FinalAnswer, RunState, ToolCall
+from .ports import CheckpointStore, EffectLedger, MemoryPort, ModelPort, PlannerPort, ToolPort
+from .types import Effect, Event, FinalAnswer, RunState, ToolCall, ToolEffectPolicy, hash_arguments
 
 Approval = Callable[[ToolCall], bool]
+
+
+class EffectUnresolvedError(RuntimeError):
+    """恢复时发现 effect 停在 executing/failed，且工具非幂等（或已超重试上限）：
+    内核拒绝自动重试，需要人工核实外部系统真实状态后手动改账本再 resume()。"""
+
+    def __init__(self, effect_id: str, run_id: str, tool_name: str, status: str) -> None:
+        self.effect_id = effect_id
+        self.run_id = run_id
+        self.tool_name = tool_name
+        self.status = status
+        super().__init__(
+            f"effect {effect_id}（工具 {tool_name}）状态为 {status}，不允许自动重试，"
+            "需要人工核实外部系统后手动修正账本（mark_succeeded/mark_failed）再 resume()"
+        )
 
 
 class AgentKernel:
@@ -28,6 +43,7 @@ class AgentKernel:
         checkpoints: CheckpointStore | None = None,
         approval: Approval | None = None,
         max_steps: int = 10,
+        effects: EffectLedger | None = None,
     ) -> None:
         self.model = model
         self.tools = tools
@@ -37,6 +53,7 @@ class AgentKernel:
         self.checkpoints = checkpoints
         self.approval = approval
         self.max_steps = max_steps
+        self.effects = effects
 
     # ------------------------------------------------------------------ utils
     def _emit(self, type_: str, **payload) -> None:
@@ -108,6 +125,18 @@ class AgentKernel:
             elif isinstance(action, ToolCall):
                 self._emit("tool.before", run_id=state.run_id, tool=action.name, args=action.args)
                 state.pending_tool = action
+                if self.effects:
+                    effect_id = f"{state.run_id}:{state.step}"
+                    state.pending_effect_id = effect_id
+                    self.effects.propose(
+                        Effect(
+                            effect_id,
+                            state.run_id,
+                            action.name,
+                            hash_arguments(action.args),
+                            idempotency_key=f"effect:{effect_id}",
+                        )
+                    )
                 state.status = "paused" if self.approval else "running"
 
             self._checkpoint(state)
@@ -118,6 +147,30 @@ class AgentKernel:
     def _run_pending_tool(self, state: RunState) -> None:
         action = state.pending_tool
         assert action is not None
+
+        effect = (
+            self.effects.get(state.pending_effect_id)
+            if self.effects and state.pending_effect_id
+            else None
+        )
+        if effect is not None and effect.status in {"succeeded", "executing", "failed"}:
+            if effect.status == "succeeded":
+                self._emit(
+                    "effect.replay", run_id=state.run_id, effect_id=effect.effect_id, tool=action.name
+                )
+                self._finish_tool(state, action, effect.result_ref or "")
+                return
+            policy = self._effect_policy(action.name)
+            max_attempts = policy.retry_policy.max_attempts if policy else 1
+            if not (policy and policy.idempotent and effect.attempt < max_attempts):
+                raise EffectUnresolvedError(effect.effect_id, state.run_id, action.name, effect.status)
+            self._emit(
+                "effect.retry",
+                run_id=state.run_id,
+                effect_id=effect.effect_id,
+                tool=action.name,
+                from_status=effect.status,
+            )
 
         if state.status == "paused":
             assert self.approval is not None  # resume() 与创建 pending 时已保证
@@ -133,13 +186,29 @@ class AgentKernel:
             if not approved:
                 self._finish_tool(state, action, f"[HITL] 用户否决了工具调用 {action.name}。")
                 return
+            if self.effects and state.pending_effect_id:
+                self.effects.mark_approved(state.pending_effect_id)
             self._checkpoint(state)  # 持久化批准；恢复后不重复询问
 
+        result = self._execute_tool(state, action)
+        self._finish_tool(state, action, result)
+
+    def _execute_tool(self, state: RunState, action: ToolCall) -> str:
+        if self.effects and state.pending_effect_id:
+            self.effects.mark_executing(state.pending_effect_id)
         try:
             result = self.tools.call(action.name, action.args)
         except Exception as exc:  # 工具失败也要回灌上下文，让模型自己纠错
             result = f"[tool-error] {exc}"
-        self._finish_tool(state, action, result)
+            if self.effects and state.pending_effect_id:
+                self.effects.mark_failed(state.pending_effect_id, result)
+            return result
+        if self.effects and state.pending_effect_id:
+            self.effects.mark_succeeded(state.pending_effect_id, result)
+        return result
+
+    def _effect_policy(self, tool_name: str) -> ToolEffectPolicy | None:
+        return next((t.effect_policy for t in self.tools.list_tools() if t.name == tool_name), None)
 
     def _finish_tool(self, state: RunState, action: ToolCall, result: str) -> None:
         self._emit("tool.after", run_id=state.run_id, tool=action.name, result=result)
@@ -154,4 +223,5 @@ class AgentKernel:
         if self.memory:
             self.memory.add(state.run_id, "tool", f"{action.name}: {result}")
         state.pending_tool = None
+        state.pending_effect_id = None
         self._checkpoint(state)

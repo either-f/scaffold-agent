@@ -19,6 +19,7 @@ jobs:
       - run: python evals/run_composite_memory.py
       - run: python evals/run_preferences.py
       - run: python evals/run_consolidation.py --mode offline
+      - run: python evals/run_effects.py
       - run: pip install opentelemetry-sdk
       - run: python evals/run_observability_real.py
       - run: pip install "langgraph>=0.6,<0.7"

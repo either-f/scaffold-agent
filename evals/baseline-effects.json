@@ -1,0 +1,38 @@
+{
+  "generated_at": "2026-07-31T02:05:51.800810+00:00",
+  "suite": "effects",
+  "scenarios": [
+    {
+      "name": "executing_not_idempotent",
+      "crashed": true,
+      "ledger_status_after_crash": "executing",
+      "raised_effect_unresolved": true,
+      "counter": [
+        1
+      ],
+      "ok": true
+    },
+    {
+      "name": "executing_idempotent_retry",
+      "final_status": "done",
+      "counter": [
+        1,
+        2
+      ],
+      "effect_attempt": 2,
+      "ok": true
+    },
+    {
+      "name": "succeeded_replay",
+      "crashed": true,
+      "ledger_status_after_crash": "succeeded",
+      "checkpoint_pending_tool_after_crash": true,
+      "final_status": "done",
+      "counter": [
+        1
+      ],
+      "ok": true
+    }
+  ],
+  "ok": true
+}

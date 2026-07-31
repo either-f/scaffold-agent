@@ -185,6 +185,21 @@ agent-kernel/
   污染；real 模式用真实 DeepSeek 生成对话 + 抽取 + 真实 pgvector 写入检索，2/2 run 处理，
   事实与偏好各命中，见 [evals/baseline-consolidation-real.json](evals/baseline-consolidation-real.json)。
 
+### 扩展：Effect Ledger 工具副作用一致性（2026-07-31）✅
+- 新增第三个横切件 `EffectLedger`（`ports.py` + `adapters/effects.py` 的
+  `SqliteEffectLedger`），`AgentKernel` 新增可选 `effects` 参数，默认 `None`
+  时行为与改动前逐字节相同。`effect_id` 由 `run_id:step` 确定性生成，
+  proposed→approved→executing→succeeded/failed 状态落盘；恢复时先查账本，
+  已成功的直接回放结果，卡在 executing/failed 的按 `ToolEffectPolicy.idempotent`
+  决定安全重试还是抛 `EffectUnresolvedError` 拒绝自动重试。兑现了 ADR-0003
+  当初写好的迁移条件（"未来开放写入工具前必须增加幂等键或调用日志"）。
+- 验收：`evals/run_effects.py` 三场景，用 `SystemExit` 真实模拟"副作用已发生、
+  进程崩溃"，两个独立 `AgentKernel` 实例共享磁盘上的 checkpoint+账本文件——
+  非幂等工具停在 executing 被拒绝重试、幂等工具安全自动重试、已成功但
+  checkpoint 未落盘时正确回放而非重复执行（这条对应最初的 bug 报告）。全量
+  回归确认 `effects=None` 时所有既有 eval/demo 结果不变。详见
+  [ADR-0008](docs/adr/0008-effect-ledger.md)。
+
 ### M4 Skill 与沙箱（3–4 天）✅（离线验收）
 - SkillLoader 接入内核（渐进披露）；Docker 沙箱执行器（CodeAct 策略在沙箱里跑代码）。
 - 验收：新增一个技能 = 只放一个文件夹；沙箱内代码无法访问宿主敏感路径。
