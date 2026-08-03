@@ -1,5 +1,10 @@
 """M5 真实 OpenTelemetry 观测验证：用真实 opentelemetry-sdk（非 mock）生成 span，
 断言真实 span 数据，而不是只验证 handler 被调用。
+
+SPEC-85: 除原有 span-count/attribute 检查外，新增 parent/child span 关系断言——
+验证 Run → Step → Model/Tool 的真实父子 trace tree，而非扁平 span 列表。同时
+验证 model.complete span 现在携带 run_id 属性（经 kernel.current_run_id
+ContextVar 注入），使并发 run 下 CostLedger 归因正确。
 """
 from __future__ import annotations
 
@@ -55,6 +60,7 @@ def run_otel_real() -> dict:
     tool_after_spans = [s for s in spans if s.name == "tool.after"]
     run_start_spans = [s for s in spans if s.name == "run.start"]
     run_end_spans = [s for s in spans if s.name == "run.end"]
+    step_start_spans = [s for s in spans if s.name == "step.start"]
 
     has_token_attrs = bool(model_complete_spans) and all(
         "prompt_tokens" in s.attributes and "duration_ms" in s.attributes
@@ -65,6 +71,76 @@ def run_otel_real() -> dict:
     tool_before_args = tool_before_spans[0].attributes.get("args", "") if tool_before_spans else ""
     args_captured = '"expression"' in tool_before_args and "2+2" in tool_before_args
 
+    # ---- SPEC-85: run_id 属性检查 ----
+    # model.complete 现在应携带 run_id（经 kernel.current_run_id ContextVar 注入）
+    model_complete_has_run_id = bool(model_complete_spans) and all(
+        "run_id" in s.attributes and s.attributes["run_id"] == state.run_id
+        for s in model_complete_spans
+    )
+
+    # ---- SPEC-85: parent/child span 关系检查 ----
+    # 期望 trace tree:
+    #   run.start (根, parent=None)
+    #     ├─ step.start (parent=run.start)
+    #     │    ├─ model.complete (parent=step.start)
+    #     │    ├─ tool.before (parent=step.start)
+    #     │    └─ tool.after (parent=step.start)
+    #     ├─ step.start (parent=run.start)
+    #     │    └─ model.complete (parent=step.start)
+    #     └─ run.end (parent=None 或 run.start，取决于实现)
+    by_id = {s.context.span_id: s for s in spans}
+
+    def parent_id(s) -> str | None:
+        p = getattr(s, "parent", None)
+        if p is None:
+            return None
+        # parent 可能是 SpanContext 对象或 None
+        return getattr(p, "span_id", None)
+
+    run_start_span = run_start_spans[0] if run_start_spans else None
+    run_start_is_root = run_start_span is not None and parent_id(run_start_span) is None
+
+    # step.start 应是 run.start 的子 span
+    step_parents_ok = bool(step_start_spans) and all(
+        parent_id(s) == run_start_span.context.span_id
+        for s in step_start_spans
+        if run_start_span is not None
+    )
+
+    # model.complete / tool.before / tool.after 应是某个 step.start 的子 span
+    step_span_ids = {s.context.span_id for s in step_start_spans}
+    model_complete_parented = bool(model_complete_spans) and all(
+        parent_id(s) in step_span_ids for s in model_complete_spans
+    )
+    tool_before_parented = bool(tool_before_spans) and all(
+        parent_id(s) in step_span_ids for s in tool_before_spans
+    )
+    tool_after_parented = bool(tool_after_spans) and all(
+        parent_id(s) in step_span_ids for s in tool_after_spans
+    )
+
+    # 至少存在一个非根 span（证明不再是全扁平）
+    has_child_spans = any(parent_id(s) is not None for s in spans)
+
+    parent_child_ok = (
+        run_start_is_root
+        and step_parents_ok
+        and model_complete_parented
+        and tool_before_parented
+        and tool_after_parented
+        and has_child_spans
+    )
+
+    # 详细 parent 信息（便于诊断）
+    parent_info = []
+    for s in spans:
+        pid = parent_id(s)
+        parent_info.append({
+            "span": s.name,
+            "span_id": str(s.context.span_id),
+            "parent_span_id": str(pid) if pid else None,
+        })
+
     ok = (
         state.status == "done"
         and len(model_complete_spans) == 2
@@ -74,6 +150,8 @@ def run_otel_real() -> dict:
         and len(run_start_spans) == 1
         and len(run_end_spans) == 1
         and args_captured
+        and model_complete_has_run_id
+        and parent_child_ok
     )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -88,6 +166,15 @@ def run_otel_real() -> dict:
         "run_start_spans": len(run_start_spans),
         "run_end_spans": len(run_end_spans),
         "args_captured": args_captured,
+        "model_complete_has_run_id": model_complete_has_run_id,
+        "parent_child_ok": parent_child_ok,
+        "run_start_is_root": run_start_is_root,
+        "step_parents_ok": step_parents_ok,
+        "model_complete_parented": model_complete_parented,
+        "tool_before_parented": tool_before_parented,
+        "tool_after_parented": tool_after_parented,
+        "has_child_spans": has_child_spans,
+        "parent_info": parent_info,
         "ok": ok,
     }
 

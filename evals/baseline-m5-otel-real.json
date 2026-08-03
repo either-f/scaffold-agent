@@ -1,17 +1,22 @@
 {
-  "generated_at": "2026-07-31T01:32:43.481137+00:00",
+  "generated_at": "2026-08-03T00:40:58.871948+00:00",
   "suite": "otel-real",
   "sdk": "opentelemetry-sdk（真实 SDK + InMemorySpanExporter，非 mock）",
-  "span_count": 8,
+  "span_count": 13,
   "span_names": [
     "model.complete",
     "model.complete",
+    "run.completed",
     "run.end",
     "run.start",
+    "run.started",
     "step.start",
     "step.start",
     "tool.after",
-    "tool.before"
+    "tool.before",
+    "tool.completed",
+    "tool.proposed",
+    "tool.started"
   ],
   "model_complete_spans": 2,
   "has_token_attrs": true,
@@ -20,5 +25,80 @@
   "run_start_spans": 1,
   "run_end_spans": 1,
   "args_captured": true,
+  "model_complete_has_run_id": true,
+  "parent_child_ok": true,
+  "run_start_is_root": true,
+  "step_parents_ok": true,
+  "model_complete_parented": true,
+  "tool_before_parented": true,
+  "tool_after_parented": true,
+  "has_child_spans": true,
+  "parent_info": [
+    {
+      "span": "run.started",
+      "span_id": "13782807501084382897",
+      "parent_span_id": "16716457830394711297"
+    },
+    {
+      "span": "model.complete",
+      "span_id": "6808047865280867615",
+      "parent_span_id": "3285778592501713945"
+    },
+    {
+      "span": "tool.before",
+      "span_id": "15914376034382482888",
+      "parent_span_id": "3285778592501713945"
+    },
+    {
+      "span": "tool.proposed",
+      "span_id": "11588073764728071282",
+      "parent_span_id": "3285778592501713945"
+    },
+    {
+      "span": "tool.started",
+      "span_id": "12870169615856746390",
+      "parent_span_id": "3285778592501713945"
+    },
+    {
+      "span": "tool.after",
+      "span_id": "9880980876936242371",
+      "parent_span_id": "3285778592501713945"
+    },
+    {
+      "span": "tool.completed",
+      "span_id": "17545402945587635229",
+      "parent_span_id": "3285778592501713945"
+    },
+    {
+      "span": "step.start",
+      "span_id": "3285778592501713945",
+      "parent_span_id": "16716457830394711297"
+    },
+    {
+      "span": "model.complete",
+      "span_id": "15931325243437887810",
+      "parent_span_id": "7883223643176801322"
+    },
+    {
+      "span": "run.completed",
+      "span_id": "17177782499522836636",
+      "parent_span_id": "7883223643176801322"
+    },
+    {
+      "span": "step.start",
+      "span_id": "7883223643176801322",
+      "parent_span_id": "16716457830394711297"
+    },
+    {
+      "span": "run.start",
+      "span_id": "16716457830394711297",
+      "parent_span_id": null
+    },
+    {
+      "span": "run.end",
+      "span_id": "13948187002899707738",
+      "parent_span_id": null
+    }
+  ],
   "ok": true
 }

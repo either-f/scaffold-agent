@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import json
 from typing import Callable
 
@@ -25,6 +26,19 @@ from .types import (
 )
 
 Approval = Callable[[ToolCall], bool]
+
+current_run_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "agent_kernel_current_run_id", default=None
+)
+"""SPEC-85: 当前 in-flight run 的 id。
+
+ObservedModel（以及任何在 ModelPort 协议下拿不到 run_id 的观测包装器）读取本
+ContextVar 给 model.complete 事件补 run_id，使 CostLedger / OTel 导出在多 run
+共享同一 EventBus 时也能正确按 run 归因。
+
+由 AgentKernel.run()/resume()/_drive() 在 run 生命期内设置；不并发时零开销
+（一次 set + 一次 reset）。零依赖、纯标准库。
+"""
 
 
 class EffectUnresolvedError(RuntimeError):
@@ -126,7 +140,7 @@ class AgentKernel:
         self._emit("run.start", run_id=state.run_id, input=user_input)
         self._emit("run.started", run_id=state.run_id, turn=state.turn, input=user_input)
         self._checkpoint(state)
-        return self._drive(state)
+        return self._with_run_context(state, self._drive, state)
 
     def resume(self, state: RunState) -> RunState:
         if state.status in {"done", "failed"}:
@@ -141,7 +155,17 @@ class AgentKernel:
             state.turn = 1
         self._emit("run.resume", run_id=state.run_id, step=state.step, status=state.status)
         self._emit("run.resumed", run_id=state.run_id, step=state.step, status=state.status)
-        return self._drive(state)
+        return self._with_run_context(state, self._drive, state)
+
+    def _with_run_context(self, state: RunState, fn: Callable[..., RunState], *args) -> RunState:
+        """SPEC-85: 在 fn 执行期间把 state.run_id 写入 current_run_id ContextVar，
+        使 ObservedModel 等拿不到 run_id 的观测包装器也能正确归因 model.complete。
+        用 reset() 保证并发 run 互不污染；不并发时零开销。"""
+        token = current_run_id.set(state.run_id)
+        try:
+            return fn(*args)
+        finally:
+            current_run_id.reset(token)
 
     def _drive(self, state: RunState) -> RunState:
         while state.status in {"running", "paused"}:
