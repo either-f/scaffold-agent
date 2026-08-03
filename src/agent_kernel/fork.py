@@ -36,4 +36,6 @@ def fork(
     # 不接 EffectLedger，所以这里选择"清空"：分支上第一次 resume() 会在
     # kernel._run_pending_tool 里用分支自己的 run_id 重新 propose 一行。
     forked.pending_effect_id = None
+    # fork 是新谱系，revision 从 0 重新计数，与源 run 的计数器独立。
+    forked.revision = 0
     return forked

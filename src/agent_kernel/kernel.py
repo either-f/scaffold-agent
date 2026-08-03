@@ -151,8 +151,8 @@ class AgentKernel:
             raise ValueError("paused checkpoint 缺少 pending_tool")
         if state.status == "paused" and self.approval is None:
             raise PermissionError("恢复待审批工具必须提供 approval")
-        if state.turn == 0:  # 兼容 M2 checkpoint
-            state.turn = 1
+        # turn==0 兼容旧 checkpoint 的逻辑已集中到 RunState.from_dict（按 schema_version
+        # 分支），此处不再重复。见 SPEC-86。
         self._emit("run.resume", run_id=state.run_id, step=state.step, status=state.status)
         self._emit("run.resumed", run_id=state.run_id, step=state.step, status=state.status)
         return self._with_run_context(state, self._drive, state)
