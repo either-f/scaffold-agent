@@ -383,3 +383,121 @@ def test_startup_error_propagation():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+"""McpToolbox.search_tools 测试：子串匹配、回退全量、永不返回空集。
+
+不需要真实 MCP server--通过子类绕过 _require_started 并手动填充 _tools，
+直接测试 search_tools 的检索逻辑。
+
+运行：PYTHONPATH=src python3 tests/test_mcp.py   （也兼容 pytest）
+"""
+import sys
+
+sys.path.insert(0, "src")
+
+import pytest
+
+from agent_kernel.adapters.tools.mcp import McpToolbox, StdioServerConfig
+from agent_kernel.types import ToolSpec
+
+
+def _make_spec(name: str, description: str = "") -> ToolSpec:
+    return ToolSpec(name=name, description=description, parameters={})
+
+
+class _SearchableMcpToolbox(McpToolbox):
+    """绕过线程启动，直接测试 search_tools 逻辑。"""
+
+    def __init__(self, tools: list[ToolSpec]) -> None:
+        # 不调用父类 __init__（会要求 servers 非空），只设置 search_tools 需要的字段
+        self._tools = list(tools)
+        self._thread = None  # _require_started 会检查，但我们在 search_tools 前手动跳过
+
+    def _require_started(self) -> None:
+        pass  # 测试桩：不做线程检查
+
+
+SAMPLE_TOOLS = [
+    _make_spec("filesystem.read_text_file", "读取文件内容"),
+    _make_spec("filesystem.list_directory", "列出目录下的文件"),
+    _make_spec("filesystem.search_files", "按名称搜索文件"),
+    _make_spec("fetch.fetch", "获取 URL 内容"),
+    _make_spec("calc.calculate", "计算数学表达式"),
+]
+
+
+def test_search_tools_matches_name_substring():
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("filesystem")
+    names = [t.name for t in results]
+    assert "filesystem.read_text_file" in names
+    assert "filesystem.list_directory" in names
+    assert "filesystem.search_files" in names
+    assert "fetch.fetch" not in names
+    assert "calc.calculate" not in names
+
+
+def test_search_tools_matches_description_substring():
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("数学")
+    names = [t.name for t in results]
+    assert names == ["calc.calculate"]
+
+
+def test_search_tools_case_insensitive():
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("FILESYSTEM")
+    names = [t.name for t in results]
+    assert len(names) == 3
+    assert all(n.startswith("filesystem.") for n in names)
+
+
+def test_search_tools_k_limits_results():
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("filesystem", k=2)
+    assert len(results) == 2
+
+
+def test_search_tools_no_match_returns_full_list():
+    """没有匹配时回退到全量列表，永不返回空集。"""
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("完全不存在的关键词xyz123")
+    assert len(results) == len(SAMPLE_TOOLS)
+
+
+def test_search_tools_no_match_with_k_returns_full_capped():
+    """没有匹配且回退全量时，k 仍然生效。"""
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("完全不存在的关键词xyz123", k=2)
+    assert len(results) == 2
+
+
+def test_search_tools_empty_query_returns_all():
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("")
+    assert len(results) == len(SAMPLE_TOOLS)
+
+
+def test_search_tools_empty_query_with_k():
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("", k=3)
+    assert len(results) == 3
+
+
+def test_search_tools_k_none_returns_all_matches():
+    box = _SearchableMcpToolbox(SAMPLE_TOOLS)
+    results = box.search_tools("filesystem", k=None)
+    assert len(results) == 3  # 所有 filesystem 工具，不截断
+
+
+if __name__ == "__main__":
+    test_search_tools_matches_name_substring()
+    test_search_tools_matches_description_substring()
+    test_search_tools_case_insensitive()
+    test_search_tools_k_limits_results()
+    test_search_tools_no_match_returns_full_list()
+    test_search_tools_no_match_with_k_returns_full_capped()
+    test_search_tools_empty_query_returns_all()
+    test_search_tools_empty_query_with_k()
+    test_search_tools_k_none_returns_all_matches()
+    print("OK: MCP search_tools 测试全部通过")
+

@@ -30,6 +30,16 @@ class ToolPort(ABC):
     @abstractmethod
     def list_tools(self) -> list[ToolSpec]: ...
 
+    def search_tools(self, query: str, k: int | None = None) -> list[ToolSpec]:
+        """按 query 检索相关工具，返回不超过 k 个（k=None 时返回全部）。
+
+        默认实现不做任何过滤，直接返回 list_tools() 的前 k 个——
+        每个 adapter 无需 override 即可获得正确（虽然未过滤）的行为。
+        能做更好匹配的 adapter（如 McpToolbox 做子串匹配）可自行覆盖。
+        """
+        tools = self.list_tools()
+        return tools[:k] if k is not None else tools
+
     @abstractmethod
     def call(self, name: str, args: dict) -> ToolResult: ...
 

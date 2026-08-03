@@ -14,7 +14,16 @@ from __future__ import annotations
 import json
 
 from ..ports import MemoryPort, ModelPort, PlannerPort, ToolPort
-from ..types import Action, FinalAnswer, Message, ModelOutput, RunState, ToolCall, ToolCallBatch
+from ..types import (
+    Action,
+    FinalAnswer,
+    Message,
+    ModelOutput,
+    RunState,
+    ToolCall,
+    ToolCallBatch,
+    ToolSpec,
+)
 from .context import ContextBuilder
 
 SYSTEM_TMPL = """你是一个会使用工具的助手。可用工具：
@@ -50,6 +59,7 @@ class ReactPlanner(PlannerPort):
         context_builder: ContextBuilder | None = None,
         preferences: MemoryPort | None = None,
         preferences_k: int = 5,
+        tool_budget: int | None = None,
     ) -> None:
         self.context_builder = context_builder or ContextBuilder()
         # 偏好记忆：独立 namespace 的 MemoryPort，每轮固定 query 检索、无条件注入，
@@ -57,6 +67,12 @@ class ReactPlanner(PlannerPort):
         # ponytail: 写入（自动提取偏好陈述）留给离线巩固脚本做，这里只做读取注入。
         self.preferences = preferences
         self.preferences_k = preferences_k
+        if tool_budget is not None and tool_budget < 0:
+            raise ValueError("tool_budget 不能为负数")
+        # tool_budget 设置后，step() 只注入 search_tools(query, k=budget) 检索到的
+        # 工具描述（加上最近成功调用过的工具），而非全量 list_tools()。
+        # None = 默认行为：全量注入，不改变任何现有调用方的 prompt。
+        self.tool_budget = tool_budget
 
     def step(
         self,
@@ -65,7 +81,12 @@ class ReactPlanner(PlannerPort):
         tools: ToolPort,
         memory: MemoryPort | None,
     ) -> Action:
-        tool_specs = tools.list_tools()
+        if self.tool_budget is None:
+            tool_specs = tools.list_tools()
+        else:
+            query = next((m.content for m in reversed(state.messages) if m.role == "user"), "")
+            tool_specs = tools.search_tools(query, k=self.tool_budget)
+            tool_specs = self._with_last_used_tool(tool_specs, state, tools)
         if getattr(model, "supports_native_tools", False):
             # 完整 schema 已经由 ModelPort 的原生 tools 通道发送，prompt 只保留短清单。
             tool_desc = "\n".join(f"- {t.name}: {t.description}" for t in tool_specs) or "(无)"
@@ -104,6 +125,27 @@ class ReactPlanner(PlannerPort):
         output = model.complete(prompt, tool_specs)
         action, _ = self._resolve(model, prompt, tool_specs, output)
         return action
+
+    @staticmethod
+    def _with_last_used_tool(
+        tool_specs: list[ToolSpec], state: RunState, tools: ToolPort
+    ) -> list[ToolSpec]:
+        """把本次 run 中最近一次调用的工具补回检索结果集--
+        多步工具序列不会因为 budget 收窄而丢失刚用过的工具。"""
+        last_used: str | None = None
+        for msg in reversed(state.messages):
+            if (
+                msg.role == "tool"
+                and msg.name
+                and not msg.content.startswith(("[tool-error]", "[HITL]"))
+            ):
+                last_used = msg.name
+                break
+        if last_used and not any(t.name == last_used for t in tool_specs):
+            spec = next((t for t in tools.list_tools() if t.name == last_used), None)
+            if spec is not None:
+                return [*tool_specs, spec]
+        return tool_specs
 
     def _resolve(
         self,

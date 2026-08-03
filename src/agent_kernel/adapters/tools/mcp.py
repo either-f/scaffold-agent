@@ -111,6 +111,26 @@ class McpToolbox(ToolPort):
         self._require_started()
         return list(self._tools)
 
+    def search_tools(self, query: str, k: int | None = None) -> list[ToolSpec]:
+        """按名称/描述做大小写无关的子串检索；不足 k 项时用其余工具补齐。"""
+        self._require_started()
+        all_tools = list(self._tools)
+        terms = [term for term in query.casefold().split() if term]
+        matched = [
+            tool
+            for tool in all_tools
+            if terms
+            and any(
+                term in f"{tool.name} {tool.description}".casefold()
+                for term in terms
+            )
+        ]
+        if k is None:
+            return matched or all_tools
+        if len(matched) < k:
+            matched.extend(tool for tool in all_tools if tool not in matched)
+        return matched[:k]
+
     def call(self, name: str, args: dict) -> ToolResult:
         self._require_started()
         if name not in self.allow:
