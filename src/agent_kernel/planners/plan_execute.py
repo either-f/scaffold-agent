@@ -64,6 +64,10 @@ class PlanExecutePlanner(ReactPlanner):
         action, final_output = self._resolve(model, prompt, tool_specs, output)
 
         plan = self._extract_plan(final_output.text)
+        if not plan and final_output.tool_calls:
+            # 原生 tool_calls 路径：模型未在文本中提供 plan（多数 provider 在返回
+            # tool_calls 时 content 为空），记录占位符而非静默丢弃，使审计链可见。
+            plan = "（模型使用原生 tool_calls，未提供文本计划）"
         if plan:
             state.add("assistant", f"[计划] {plan}")
 

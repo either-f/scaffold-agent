@@ -10,6 +10,7 @@ sys.path.insert(0, "src")
 import pytest
 
 from agent_kernel.adapters.tools.local import default_toolbox
+from agent_kernel.planners.plan_execute import PlanExecutePlanner
 from agent_kernel.planners.react import ActionParseError, ReactPlanner
 from agent_kernel.ports import ModelPort
 from agent_kernel.types import ModelOutput, RunState, ToolCall
@@ -100,6 +101,56 @@ def test_native_tool_call_id_propagates_to_action():
     assert action.call_id == "call_42"
 
 
+def test_plan_execute_native_tool_calls_records_placeholder_plan():
+    """原生 tool_calls 且无文本 plan 时，RunState.messages 仍记录占位计划消息，不静默丢弃。"""
+    model = SequenceModel(
+        [ModelOutput(text="", tool_calls=[{"name": "calc", "args": {"expression": "1+1"}}])]
+    )
+    planner = PlanExecutePlanner()
+    state = RunState()
+    action = planner.step(state, model, default_toolbox(), None)
+    assert isinstance(action, ToolCall)
+    assert action.name == "calc"
+    # 必须有一条 [计划] 消息，说明模型跳过了计划（而非静默无记录）
+    plan_msgs = [m for m in state.messages if m.role == "assistant" and m.content.startswith("[计划]")]
+    assert len(plan_msgs) == 1
+    assert "未提供文本计划" in plan_msgs[0].content
+
+
+def test_plan_execute_native_tool_calls_uses_text_plan_if_present():
+    """原生 tool_calls 且模型同时提供了文本 plan 时，优先采用文本中的 plan。"""
+    model = SequenceModel(
+        [
+            ModelOutput(
+                text='{"plan": "1. 计算 1+1"}',
+                tool_calls=[{"name": "calc", "args": {"expression": "1+1"}}],
+            )
+        ]
+    )
+    planner = PlanExecutePlanner()
+    state = RunState()
+    action = planner.step(state, model, default_toolbox(), None)
+    assert isinstance(action, ToolCall)
+    plan_msgs = [m for m in state.messages if m.role == "assistant" and m.content.startswith("[计划]")]
+    assert len(plan_msgs) == 1
+    assert "计算 1+1" in plan_msgs[0].content
+
+
+def test_plan_execute_text_json_path_unchanged():
+    """非原生（文本 JSON）路径行为不变：plan 从 JSON 中提取。"""
+    model = SequenceModel(
+        [ModelOutput(text='{"thought": "先计划", "plan": "1. 计算", "tool": "calc", "args": {"expression": "2+2"}}')]
+    )
+    planner = PlanExecutePlanner()
+    state = RunState()
+    action = planner.step(state, model, default_toolbox(), None)
+    assert isinstance(action, ToolCall)
+    assert action.name == "calc"
+    plan_msgs = [m for m in state.messages if m.role == "assistant" and m.content.startswith("[计划]")]
+    assert len(plan_msgs) == 1
+    assert "计算" in plan_msgs[0].content
+
+
 if __name__ == "__main__":
     test_parse_raises_on_garbage_text()
     test_parse_raises_when_missing_tool_and_final()
@@ -109,4 +160,7 @@ if __name__ == "__main__":
     test_step_raises_after_second_failure()
     test_native_tool_calls_bypass_text_parsing()
     test_native_tool_call_id_propagates_to_action()
+    test_plan_execute_native_tool_calls_records_placeholder_plan()
+    test_plan_execute_native_tool_calls_uses_text_plan_if_present()
+    test_plan_execute_text_json_path_unchanged()
     print("OK: planner 测试全部通过")
