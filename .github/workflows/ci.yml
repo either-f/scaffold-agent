@@ -6,6 +6,52 @@ permissions:
   contents: read
 
 jobs:
+  lint-type:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install ruff pyright
+      - run: ruff check src tests evals examples
+      - run: pyright src
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # model/MCP 协议测试必须实际执行；Daytona 仍是无账号的可选基础设施测试。
+      - run: pip install -e ".[model,mcp]" pytest pytest-cov
+      - run: python -m pytest tests/ -q --cov=agent_kernel --cov-report=term-missing
+      - run: python -m compileall -q src tests evals
+      - name: "kernel: no third-party imports"
+        run: python evals/check_core_imports.py
+
+  # 真实 wheel 安装冒烟测试：不走 PYTHONPATH=src，而是 pip install . 真正构建安装包，
+  # 验证 [tool.setuptools.packages.find] 能正确打包 agent_kernel，捕获打包回归。
+  wheel-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install .
+      - name: import installed package (no PYTHONPATH)
+        run: python -c "import agent_kernel; print('import ok', agent_kernel.__file__)"
+      - name: core-kernel import smoke check against installed package
+        run: python evals/check_core_imports.py
+
   offline:
     runs-on: ubuntu-latest
     steps:
@@ -13,8 +59,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pytest
-      - run: python -m pytest tests/ -q
+      - run: pip install -e ".[model,mcp]" pytest
       - run: python evals/run_eval.py --mode offline
       - run: python evals/run_m3.py context
       - run: python evals/run_m5.py
@@ -29,6 +74,3 @@ jobs:
       - run: pip install "langgraph>=0.6,<0.7"
       - run: python evals/run_langgraph_real.py
       - run: python examples/record_demos.py --check
-      - run: python -m compileall -q src examples evals
-      - name: "kernel: no third-party imports"
-        run: python evals/check_core_imports.py
