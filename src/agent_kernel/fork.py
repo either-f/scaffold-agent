@@ -3,6 +3,12 @@
 
 kernel.py 零改动：fork 出来的 RunState 直接交给现有、未改动的
 AgentKernel(...).resume() 就能继续跑，跟正常恢复没有区别。
+
+SPEC-94: fork() 新增可选 bus 参数，在返回前发一条 run.forked 事件，
+携带 run_id / forked_from，使 event_sourcing.reduce 能从事件流重建
+forked_from（此前该字段只活在 RunState 里，事件流重建不出来）。
+bus 缺省为 None，保持与既有调用方（evals/run_fork.py）100% 兼容；
+SPEC-80 若也给 fork() 加参数，二者都在函数末尾附近、互不冲突。
 """
 from __future__ import annotations
 
@@ -10,7 +16,8 @@ import re
 import uuid
 
 from .checkpoint import JsonCheckpointStore
-from .types import RunState
+from .events import EventBus
+from .types import Event, RunState
 
 _LABEL_RE = re.compile(r"turn_(\d+)_step_(\d+)")
 
@@ -20,6 +27,7 @@ def fork(
     source_run_id: str,
     checkpoint: str,
     new_run_id: str | None = None,
+    bus: EventBus | None = None,
 ) -> RunState:
     match = _LABEL_RE.fullmatch(checkpoint)
     if not match:
@@ -38,4 +46,20 @@ def fork(
     forked.pending_effect_id = None
     # fork 是新谱系，revision 从 0 重新计数，与源 run 的计数器独立。
     forked.revision = 0
+    # SPEC-94: 事件流里也要能看出这是 fork 出来的 run。bus 缺省 None，既有调用方无感。
+    # 携带 turn/step 使 event_sourcing.reduce 能从事件流完整重建 fork 点的状态。
+    if bus is not None:
+        bus.publish(
+            Event(
+                "run.forked",
+                {
+                    "run_id": forked.run_id,
+                    "forked_from": forked.forked_from,
+                    "source_run_id": source_run_id,
+                    "checkpoint": checkpoint,
+                    "turn": forked.turn,
+                    "step": forked.step,
+                },
+            )
+        )
     return forked

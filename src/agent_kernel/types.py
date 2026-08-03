@@ -145,6 +145,11 @@ class Event:
     type: str  # run.start / step.start / tool.before / tool.after / run.end ...
     payload: dict[str, Any] = field(default_factory=dict)
     ts: float = field(default_factory=time.time)
+    # SPEC-94: 事件身份与排序字段。均为 additive、带安全默认值，旧代码构造
+    # Event(type, payload) / Event(type_, payload) 仍能工作；_emit 会统一盖戳。
+    event_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    schema_version: int = 1
+    sequence: int = 0
 
 
 EffectStatus = Literal[
@@ -203,6 +208,8 @@ class RunState:
     # SPEC-86: 乐观并发控制——每次 save() 递增，写前与 latest.json 比对发现
     # 磁盘版本更高即说明有另一个 writer 写过更新的 checkpoint，抛 CheckpointConflictError。
     revision: int = 0
+    # SPEC-94: 失败明细，run.failed 时填充；additive，默认 None，旧 checkpoint 兼容。
+    last_error: str | None = None
 
     def __post_init__(self) -> None:
         _validate_run_id(self.run_id)

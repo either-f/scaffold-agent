@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import threading
 import time
 from typing import Callable
 
@@ -133,10 +134,20 @@ class AgentKernel:
         # SPEC-88 Req4: 委派深度上下文，WorkerDelegationPort 在 call() 里读取并传递。
         self.delegation_depth = delegation_depth
         self.max_delegation_depth = max_delegation_depth
+        # SPEC-94: per-run_id 单调递增事件序列号。两个并发 run 各自从 1 开始。
+        self._event_sequences: dict[str, int] = {}
+        self._event_sequence_lock = threading.Lock()
 
     # ------------------------------------------------------------------ utils
     def _emit(self, type_: str, **payload) -> None:
-        self.bus.publish(Event(type_, payload))
+        # SPEC-94: 统一盖戳 event_id（uuid4 hex，保证唯一）与 sequence（按 run_id 递增），
+        # 调用方继续只传 type_ 和 **payload，无需逐处改写。run_id 缺失时退化为单进程全局序列。
+        run_id = str(payload.get("run_id", "")) if payload else ""
+        with self._event_sequence_lock:
+            seq = self._event_sequences.get(run_id, 0) + 1
+            self._event_sequences[run_id] = seq
+        event = Event(type=type_, payload=payload, sequence=seq)
+        self.bus.publish(event)
 
     def _checkpoint(self, state: RunState) -> None:
         if self.checkpoints:
@@ -151,6 +162,7 @@ class AgentKernel:
             state.status = "running"
             state.answer = None
             state.pending_tool = None
+            state.last_error = None
         elif state.status in {"paused", "failed"}:
             raise ValueError(f"{state.status} run 不能直接续聊")
         elif state.status != "running":
@@ -218,13 +230,33 @@ class AgentKernel:
             if state.step >= self.max_steps:
                 state.status = "failed"
                 state.answer = "已达最大步数限制。"
-                self._emit("run.failed", run_id=state.run_id, step=state.step, answer=state.answer)
+                state.last_error = state.answer
+                self._emit(
+                    "run.failed",
+                    run_id=state.run_id,
+                    step=state.step,
+                    answer=state.answer,
+                    error_type="MaxStepsExhausted",
+                    error_message=state.answer,
+                )
                 self._checkpoint(state)
                 break
             state.step += 1
             self._emit("step.start", run_id=state.run_id, step=state.step)
 
+            old_summary = state.context_summary
+            old_summary_count = state.summarized_message_count
             action = self.planner.step(state, self.model, self.tools, self.memory)
+            if (
+                state.context_summary != old_summary
+                or state.summarized_message_count != old_summary_count
+            ):
+                self._emit(
+                    "context.summarized",
+                    run_id=state.run_id,
+                    context_summary=state.context_summary,
+                    summarized_message_count=state.summarized_message_count,
+                )
             # 同步 model 调用可能跨过 deadline；返回后、派发工具或接受 final 前再检查一次。
             if self._check_cancel_or_deadline(state):
                 break
