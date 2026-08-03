@@ -98,6 +98,9 @@ class EffectLedger(ABC):
     def mark_failed(self, effect_id: str, result_ref: str) -> None: ...
 
     @abstractmethod
+    def mark_rejected(self, effect_id: str) -> None: ...
+
+    @abstractmethod
     def get(self, effect_id: str) -> Effect | None: ...
 
 

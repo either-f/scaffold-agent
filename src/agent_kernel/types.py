@@ -26,7 +26,9 @@ class ToolEffectPolicy:
     read_only: bool = False
     idempotent: bool = False
     compensatable: bool = False  # 目前只记录，内核逻辑不读取
-    requires_approval: bool = False  # 目前只记录；审批仍由 AgentKernel.approval 是否配置决定
+    # 内核 fail-closed：requires_approval=True 且 kernel 未配置 approval 回调时，
+    # 在执行前抛 ApprovalRequiredError，不会静默跑未审批的副作用工具。
+    requires_approval: bool = False
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
 
 
@@ -70,7 +72,9 @@ class Event:
     ts: float = field(default_factory=time.time)
 
 
-EffectStatus = Literal["proposed", "approved", "executing", "succeeded", "failed", "unknown"]
+EffectStatus = Literal[
+    "proposed", "approved", "executing", "succeeded", "failed", "rejected", "unknown"
+]
 
 
 @dataclass

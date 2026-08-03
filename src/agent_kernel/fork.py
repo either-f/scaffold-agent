@@ -31,4 +31,9 @@ def fork(
     forked = RunState.from_dict(source.to_dict())  # 序列化往返 = 不共享引用的深拷贝
     forked.run_id = new_run_id or uuid.uuid4().hex[:12]
     forked.forked_from = f"{source_run_id}@{checkpoint}"
+    # SPEC-80 Req1：不能把源 run 的 pending_effect_id 带进分支——那会让两个分支
+    # 共享同一行 effect（key=旧 run_id:turn:step），互相串结果。fork() 保持纯函数、
+    # 不接 EffectLedger，所以这里选择"清空"：分支上第一次 resume() 会在
+    # kernel._run_pending_tool 里用分支自己的 run_id 重新 propose 一行。
+    forked.pending_effect_id = None
     return forked

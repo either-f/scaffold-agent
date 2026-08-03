@@ -13,6 +13,7 @@ from typing import Callable
 from .events import EventBus
 from .ports import CheckpointStore, EffectLedger, MemoryPort, ModelPort, PlannerPort, ToolPort
 from .types import (
+    ArtifactRef,
     Effect,
     Event,
     FinalAnswer,
@@ -42,17 +43,32 @@ class EffectUnresolvedError(RuntimeError):
 
 
 class EffectArgumentMismatchError(RuntimeError):
-    """账本里 effect_id 命中的记录，参数哈希却跟本次调用对不上：
-    说明 effect_id 发生了冲突（例如跨轮复用了同一个 id），账本已不可信。
-    拒绝自动回放/重试，需要人工核实后再处理。"""
+    """账本里 effect_id 命中的记录，参数哈希 / tool_name / run_id 跟本次调用对不上：
+    说明 effect_id 发生了冲突（例如跨轮复用了同一个 id，或 fork 后错误地复用了源 run 的行），
+    账本已不可信。拒绝自动回放/重试，需要人工核实后再处理。"""
 
     def __init__(self, effect_id: str, run_id: str, tool_name: str) -> None:
         self.effect_id = effect_id
         self.run_id = run_id
         self.tool_name = tool_name
         super().__init__(
-            f"effect {effect_id}（工具 {tool_name}）账本参数哈希与本次调用不一致，"
-            "疑似 effect_id 冲突，拒绝自动回放/重试，需要人工核实"
+            f"effect {effect_id}（工具 {tool_name}）账本记录与本次调用不一致"
+            "（参数哈希/tool_name/run_id 不匹配），疑似 effect_id 冲突，"
+            "拒绝自动回放/重试，需要人工核实"
+        )
+
+
+class ApprovalRequiredError(RuntimeError):
+    """工具通过 ToolEffectPolicy.requires_approval=True 声明需要审批，
+    但内核未配置 approval 回调。fail-closed：执行前直接抛出，
+    不静默跑未审批的副作用工具。"""
+
+    def __init__(self, run_id: str, tool_name: str) -> None:
+        self.run_id = run_id
+        self.tool_name = tool_name
+        super().__init__(
+            f"工具 {tool_name} 声明 requires_approval=True，但内核未配置 approval 回调；"
+            "fail-closed 拒绝执行（构造 AgentKernel 时传 approval=回调 以放行）"
         )
 
 
@@ -152,6 +168,12 @@ class AgentKernel:
                 self._emit("run.completed", run_id=state.run_id, step=state.step, answer=action.content)
             elif isinstance(action, ToolCall):
                 self._emit("tool.before", run_id=state.run_id, tool=action.name, args=action.args)
+                # fail-closed：工具声明 requires_approval=True 但内核没有 approval 回调，
+                # 拒绝执行副作用（ADR-0008 的审批契约由工具自己声明，而非仅由调用方决定）。
+                if self.approval is None:
+                    policy = self._effect_policy(action.name)
+                    if policy is not None and policy.requires_approval:
+                        raise ApprovalRequiredError(state.run_id, action.name)
                 state.pending_tool = action
                 effect_id = None
                 if self.effects:
@@ -188,20 +210,52 @@ class AgentKernel:
         action = state.pending_tool
         assert action is not None
 
+        # fork-safe effect identity（SPEC-80 Req1）：fork() 会清掉 pending_effect_id，
+        # 让分支上第一次 resume 走到这里时，用分支自己的 run_id 重新 propose 一行，
+        # 而不是复用源 run 的 effect 行（那会让两个分支共享一行、互相串结果）。
+        if self.effects and state.pending_effect_id is None:
+            effect_id = f"{state.run_id}:{state.turn}:{state.step}"
+            state.pending_effect_id = effect_id
+            self.effects.propose(
+                Effect(
+                    effect_id,
+                    state.run_id,
+                    action.name,
+                    hash_arguments(action.args),
+                    idempotency_key=f"effect:{effect_id}",
+                )
+            )
+
         effect = (
             self.effects.get(state.pending_effect_id)
             if self.effects and state.pending_effect_id
             else None
         )
+        # 校验账本命中行确实是"本次调用"的行：参数哈希 + tool_name + run_id 三者都要对上。
+        # 单独只校验 hash 会被零参工具碰撞（hash_arguments({}) 相同）绕过。
         if effect is not None and effect.arguments_hash != hash_arguments(action.args):
             raise EffectArgumentMismatchError(effect.effect_id, state.run_id, action.name)
-        if effect is not None and effect.status in {"succeeded", "executing", "failed"}:
+        if effect is not None and effect.tool_name != action.name:
+            raise EffectArgumentMismatchError(effect.effect_id, state.run_id, action.name)
+        if effect is not None and effect.run_id != state.run_id:
+            raise EffectArgumentMismatchError(effect.effect_id, state.run_id, action.name)
+        # 终态行（含本 Spec 新增的 rejected）不允许自动重放/重试。
+        if effect is not None and effect.status in {"succeeded", "executing", "failed", "rejected"}:
             if effect.status == "succeeded":
                 self._emit(
                     "effect.replay", run_id=state.run_id, effect_id=effect.effect_id, tool=action.name
                 )
-                self._finish_tool(state, action, ToolResult(content=effect.result_ref or ""))
+                # 回放时重建 ToolResult：优先解码 result_ref 里的 JSON（带 artifacts），
+                # 兼容纯文本旧行（SPEC-80 Req7）。
+                self._finish_tool(state, action, _decode_replay_result(effect.result_ref))
                 return
+            if effect.status == "rejected":
+                # rejected 是终态：人工/审批已明确拒绝，内核不自动重跑。
+                # 走到这里的唯一可能是同一 effect_id 被复用到一个新的、合法的调用上——
+                # 但那会先被上面的 tool_name/run_id/hash 校验拦下。这里保守拒绝重放。
+                raise EffectUnresolvedError(
+                    effect.effect_id, state.run_id, action.name, effect.status
+                )
             policy = self._effect_policy(action.name)
             max_attempts = policy.retry_policy.max_attempts if policy else 1
             if not (policy and policy.idempotent and effect.attempt < max_attempts):
@@ -229,6 +283,10 @@ class AgentKernel:
             )
             state.status = "running"
             if not approved:
+                # SPEC-80 Req4：被否决的工具调用要把 effect 行落到终态 "rejected"，
+                # 不能一直停在 "proposed" 造成死胡同。
+                if self.effects and state.pending_effect_id:
+                    self.effects.mark_rejected(state.pending_effect_id)
                 self._finish_tool(
                     state, action, ToolResult(content=f"[HITL] 用户否决了工具调用 {action.name}。")
                 )
@@ -252,15 +310,19 @@ class AgentKernel:
                 self.effects.mark_failed(state.pending_effect_id, result.content)
             return result
         if self.effects and state.pending_effect_id:
-            self.effects.mark_succeeded(state.pending_effect_id, result.content)
+            # SPEC-80 Req7：成功时把 content + artifacts 一起 JSON 编码进 result_ref，
+            # 这样崩溃恢复后回放能重建带 ArtifactRef 的 ToolResult，而不是只剩扁平文本。
+            self.effects.mark_succeeded(
+                state.pending_effect_id, _encode_success_result_ref(result)
+            )
         return result
 
     def _effect_policy(self, tool_name: str) -> ToolEffectPolicy | None:
         return next((t.effect_policy for t in self.tools.list_tools() if t.name == tool_name), None)
 
     def _finish_tool(self, state: RunState, action: ToolCall, result: ToolResult) -> None:
-        # ponytail: effect ledger 与消息历史都只落 text；artifacts 只在事件流里给外部观测器，
-        # 副作用重放不恢复 artifacts（回放场景下模型只需要看到当时回灌的文本即可）。
+        # effect ledger 的 result_ref 在 _execute_tool 里已落 JSON envelope（content+artifacts），
+        # 回放分支由 _decode_replay_result 解码重建；这里只负责消息历史与事件流。
         text = result.content
         if result.artifacts:
             text += "\n" + "\n".join(f"[artifact] {a.uri} ({a.mime_type})" for a in result.artifacts)
@@ -289,3 +351,52 @@ class AgentKernel:
             assistant_message=assistant_message,
         )
         self._checkpoint(state)
+
+
+# --------------------------------------------------------------------------- #
+# result_ref 编解码（SPEC-80 Req7：回放要能重建带 ArtifactRef 的 ToolResult）
+# --------------------------------------------------------------------------- #
+# 成功行：JSON envelope {"content": "...", "artifacts": [{"uri","mime_type","description"}]}
+# 失败行：保留纯文本（mark_failed 只存错误文本，不需要 artifacts）
+# 旧行兼容：decode 时 JSON 解析失败就退回 ToolResult(content=原文本)。
+
+def _encode_success_result_ref(result: ToolResult) -> str:
+    """把 ToolResult 序列化成可塞进 effect.result_ref 的字符串。
+    带 artifacts 时用 JSON envelope；无 artifacts 且 content 是合法 JSON 时
+    仍走 envelope（key 固定），保证 decode 路径单一。"""
+    payload = {
+        "content": result.content,
+        "artifacts": [
+            {"uri": a.uri, "mime_type": a.mime_type, "description": a.description}
+            for a in result.artifacts
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _decode_replay_result(result_ref: str | None) -> ToolResult:
+    """从 effect.result_ref 重建 ToolResult。
+    - JSON envelope（本 Spec 之后写的行）：还原 content + artifacts。
+    - 非法 JSON / 缺字段（旧行、纯文本行）：退回 ToolResult(content=原文)，无 artifacts。"""
+    if not result_ref:
+        return ToolResult(content="")
+    try:
+        payload = json.loads(result_ref)
+    except (json.JSONDecodeError, TypeError):
+        return ToolResult(content=result_ref)
+    if not isinstance(payload, dict) or "content" not in payload:
+        return ToolResult(content=result_ref)
+    raw_artifacts = payload.get("artifacts") or []
+    artifacts: list[ArtifactRef] = []
+    for a in raw_artifacts:
+        if not isinstance(a, dict) or "uri" not in a:
+            continue
+        artifacts.append(
+            ArtifactRef(
+                uri=str(a["uri"]),
+                mime_type=str(a.get("mime_type", "text/plain")),
+                description=str(a.get("description", "")),
+            )
+        )
+    return ToolResult(content=str(payload["content"]), artifacts=artifacts)
+

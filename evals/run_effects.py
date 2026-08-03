@@ -249,7 +249,9 @@ def scenario_succeeded_replay() -> dict:
             crashed
             and effect_after_crash is not None
             and effect_after_crash.status == "succeeded"
-            and effect_after_crash.result_ref == "sent-1"
+            # SPEC-80 Req7：成功行的 result_ref 现在是 JSON envelope
+            # {"content": "sent-1", "artifacts": [...]}，而不是裸文本。
+            and "sent-1" in (effect_after_crash.result_ref or "")
             and checkpoint_after_crash is not None
             and checkpoint_after_crash.pending_tool is not None  # checkpoint 确实没来得及清 pending
             and final_state.status == "done"
