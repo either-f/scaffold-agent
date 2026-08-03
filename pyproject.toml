@@ -4,6 +4,21 @@ version = "0.1.0"
 description = "微内核 + 插件端口的通用 agent 框架（内核零第三方依赖）"
 requires-python = ">=3.11"
 dependencies = []
+authors = [{ name = "agent-kernel maintainers" }]
+readme = "README.md"
+license = { file = "LICENSE" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/either-f/scaffold-agent"
+
+[project.scripts]
+agent-kernel = "agent_kernel.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8,<9"]

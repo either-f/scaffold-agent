@@ -2,6 +2,8 @@
 .cache/
 .tools/
 runs/
+.agent-kernel/
 __pycache__/
 *.pyc
 *.egg-info/
+dist/
