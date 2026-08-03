@@ -38,6 +38,18 @@ def test_parse_raises_when_missing_tool_and_final():
         ReactPlanner._parse('{"thought": "只有 thought，没有 tool 也没有 final"}')
 
 
+def test_parse_rejects_empty_final():
+    """final 存在但为空串，必须抛 ActionParseError（不得静默完成 run）。"""
+    with pytest.raises(ActionParseError):
+        ReactPlanner._parse('{"thought": "答案来了", "final": ""}')
+
+
+def test_parse_rejects_whitespace_only_final():
+    """final 存在但纯空白，必须抛 ActionParseError。"""
+    with pytest.raises(ActionParseError):
+        ReactPlanner._parse('{"thought": "答案来了", "final": "   "}')
+
+
 def test_step_retries_once_then_succeeds():
     model = SequenceModel(
         [
@@ -72,10 +84,29 @@ def test_native_tool_calls_bypass_text_parsing():
     assert action.args == {"expression": "1+1"}
 
 
+def test_native_tool_call_id_propagates_to_action():
+    """原生 tool_calls 带的 id 必须原样进入返回的 ToolCall.call_id。"""
+    model = SequenceModel(
+        [
+            ModelOutput(
+                text="",
+                tool_calls=[{"name": "calc", "args": {"expression": "1+1"}, "id": "call_42"}],
+            )
+        ]
+    )
+    planner = ReactPlanner()
+    action = planner.step(RunState(), model, default_toolbox(), None)
+    assert isinstance(action, ToolCall)
+    assert action.call_id == "call_42"
+
+
 if __name__ == "__main__":
     test_parse_raises_on_garbage_text()
     test_parse_raises_when_missing_tool_and_final()
+    test_parse_rejects_empty_final()
+    test_parse_rejects_whitespace_only_final()
     test_step_retries_once_then_succeeds()
     test_step_raises_after_second_failure()
     test_native_tool_calls_bypass_text_parsing()
+    test_native_tool_call_id_propagates_to_action()
     print("OK: planner 测试全部通过")

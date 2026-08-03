@@ -111,7 +111,10 @@ class ReactPlanner(PlannerPort):
             # ponytail: 内核动作协议一步一动作，模型并行发起多个 tool_calls 时只取第一个；
             # 真有并行工具调用需求时再把 Action 扩成 list。
             call = output.tool_calls[0]
-            return ToolCall(name=call["name"], args=call.get("args", {})), output
+            return (
+                ToolCall(name=call["name"], args=call.get("args", {}), call_id=call.get("id")),
+                output,
+            )
         try:
             return self._parse(output.text), output
         except ActionParseError:
@@ -119,7 +122,10 @@ class ReactPlanner(PlannerPort):
             retry_output = model.complete(retry_prompt, tool_specs)
             if retry_output.tool_calls:
                 call = retry_output.tool_calls[0]
-                return ToolCall(name=call["name"], args=call.get("args", {})), retry_output
+                return (
+                    ToolCall(name=call["name"], args=call.get("args", {}), call_id=call.get("id")),
+                    retry_output,
+                )
             return self._parse(retry_output.text), retry_output  # 第二次仍失败：直接抛出
 
     @staticmethod
@@ -136,4 +142,8 @@ class ReactPlanner(PlannerPort):
             return ToolCall(name=obj["tool"], args=obj.get("args", {}), thought=thought)
         if "final" not in obj:
             raise ActionParseError(text)
-        return FinalAnswer(content=str(obj["final"]), thought=thought)
+        final = str(obj["final"])
+        if not final.strip():
+            # 系统提示明确要求 "final 不得为空"；空/纯空白 final 不允许静默完成 run。
+            raise ActionParseError(text)
+        return FinalAnswer(content=final, thought=thought)

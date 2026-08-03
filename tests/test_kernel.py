@@ -14,7 +14,7 @@ from agent_kernel.adapters.tools.local import LocalToolbox, default_toolbox
 from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
-from agent_kernel.types import RunState
+from agent_kernel.types import ModelOutput, RunState
 
 SCRIPT = [
     '{"thought": "t", "tool": "calc", "args": {"expression": "(3+4)*7"}}',
@@ -170,6 +170,87 @@ def test_multi_turn_resets_step_but_keeps_run_id():
     assert state2.turn == 2 and state2.step == 1  # step 在新一轮清零，run_id 不变
 
 
+class NativeToolCallModel:
+    """模拟原生 tool calling：先返回带 id 的 tool_calls，再返回最终答案。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return ModelOutput(
+                text="",
+                tool_calls=[
+                    {"name": "calc", "args": {"expression": "1+1"}, "id": "call_native_1"}
+                ],
+            )
+        return ModelOutput(text='{"thought": "t", "final": "结果是 2"}')
+
+
+def test_native_tool_call_records_tool_calls_and_tool_call_id():
+    """native 路径：内核记录的 assistant 消息带 tool_calls，tool 消息带匹配的 tool_call_id。"""
+    tools = LocalToolbox()
+    tools.register("calc", "calc", lambda expression: str(eval(expression)))
+    kernel = AgentKernel(
+        model=NativeToolCallModel(),
+        tools=tools,
+        planner=ReactPlanner(),
+    )
+    state = kernel.run("算 1+1")
+    assert state.status == "done"
+
+    # 找到发起 tool call 的 assistant 消息
+    asst_with_tc = [m for m in state.messages if m.role == "assistant" and m.tool_calls]
+    assert len(asst_with_tc) == 1
+    assert asst_with_tc[0].tool_calls[0]["id"] == "call_native_1"
+    assert asst_with_tc[0].tool_calls[0]["name"] == "calc"
+
+    # 紧随其后的 tool 消息带同一 tool_call_id
+    tool_msgs = [m for m in state.messages if m.role == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0].tool_call_id == "call_native_1"
+    assert tool_msgs[0].content == "2"
+
+
+def test_native_tool_call_pending_tool_carries_call_id_for_resume():
+    """native 路径下 paused 的 pending_tool 必须携带 call_id，resume 后仍能正确回灌。"""
+    tools = LocalToolbox()
+    tools.register("calc", "calc", lambda expression: str(eval(expression)))
+    with tempfile.TemporaryDirectory() as tmp:
+        store = JsonCheckpointStore(tmp)
+        crashing_kernel = AgentKernel(
+            model=NativeToolCallModel(),
+            tools=tools,
+            planner=ReactPlanner(),
+            checkpoints=store,
+            approval=_crash_approval,
+        )
+        with pytest.raises(SystemExit):
+            crashing_kernel.run("算 1+1", state=RunState(run_id="native-1"))
+
+        loaded = store.load("native-1")
+        assert loaded is not None and loaded.status == "paused"
+        assert loaded.pending_tool is not None
+        assert loaded.pending_tool.call_id == "call_native_1"
+
+        # resume 时 pending_tool 的 call_id 仍在，且记录的 assistant 消息带 tool_calls
+        resuming_kernel = AgentKernel(
+            model=FakeScriptedModel(['{"thought": "t", "final": "结果是 2"}']),
+            tools=tools,
+            planner=ReactPlanner(),
+            checkpoints=store,
+            approval=lambda call: True,
+        )
+        resumed = resuming_kernel.resume(loaded)
+        assert resumed.status == "done"
+        asst_with_tc = [m for m in resumed.messages if m.role == "assistant" and m.tool_calls]
+        assert len(asst_with_tc) == 1
+        assert asst_with_tc[0].tool_calls[0]["id"] == "call_native_1"
+        tool_msgs = [m for m in resumed.messages if m.role == "tool"]
+        assert tool_msgs[0].tool_call_id == "call_native_1"
+
+
 if __name__ == "__main__":
     test_kernel_loop_and_checkpoint()
     test_hitl_veto()
@@ -179,4 +260,6 @@ if __name__ == "__main__":
     test_resume_paused_without_approval_callback_rejected()
     test_max_steps_exhausted()
     test_multi_turn_resets_step_but_keeps_run_id()
+    test_native_tool_call_records_tool_calls_and_tool_call_id()
+    test_native_tool_call_pending_tool_carries_call_id_for_resume()
     print("OK: kernel 状态机测试全部通过")

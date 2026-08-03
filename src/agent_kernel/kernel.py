@@ -330,12 +330,30 @@ class AgentKernel:
             {"uri": a.uri, "mime_type": a.mime_type, "description": a.description} for a in result.artifacts
         ]
         self._emit("tool.after", run_id=state.run_id, tool=action.name, result=text, artifacts=artifacts_payload)
-        assistant_message = json.dumps(
-            {"thought": action.thought, "tool": action.name, "args": action.args},
-            ensure_ascii=False,
-        )
-        state.add("assistant", assistant_message)
-        state.add("tool", text, name=action.name)
+        if action.call_id is not None:
+            # 原生 tool calling 回路：assistant 消息带 tool_calls，紧接的 tool 消息带
+            # 同一 tool_call_id，供 LiteLLMModel.complete 还原 provider 协议要求的形状。
+            state.add(
+                "assistant",
+                action.thought,
+                tool_calls=[
+                    {"id": action.call_id, "name": action.name, "args": action.args}
+                ],
+            )
+            state.add("tool", text, name=action.name, tool_call_id=action.call_id)
+            assistant_message = json.dumps(
+                {"thought": action.thought, "tool": action.name, "args": action.args},
+                ensure_ascii=False,
+            )
+        else:
+            # 非 native 路径（文本 JSON / FakeScriptedModel）：保持旧的扁平化行为，
+            # 离线 eval 字节不变。
+            assistant_message = json.dumps(
+                {"thought": action.thought, "tool": action.name, "args": action.args},
+                ensure_ascii=False,
+            )
+            state.add("assistant", assistant_message)
+            state.add("tool", text, name=action.name)
         if self.memory:
             self.memory.add(state.run_id, "tool", f"{action.name}: {text}")
         state.pending_tool = None

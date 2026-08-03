@@ -14,6 +14,12 @@ class Message:
     role: str  # system | user | assistant | tool
     content: str
     name: str | None = None  # 工具消息时为工具名
+    # 原生 tool calling 回路相关：assistant 消息带上它发起的 tool_call（含 id/name/args），
+    # 随后对应的 tool 消息带上同一 tool_call_id，供 adapter 还原 provider 协议要求的
+    # {"role":"assistant","tool_calls":[...]} + {"role":"tool","tool_call_id":...} 形状。
+    # 非 native 路径（文本 JSON / FakeScriptedModel）这两个字段恒为 None，行为不变。
+    tool_call_id: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None  # assistant 侧：[{"id","name","args"}]
 
 
 @dataclass
@@ -45,6 +51,9 @@ class ToolCall:
     name: str
     args: dict[str, Any] = field(default_factory=dict)
     thought: str = ""
+    # 原生 tool calling：provider 返回的 tool_call id，需在下一轮回灌时原样匹配。
+    # 文本 JSON 路径（含 FakeScriptedModel）不产生 id，保持 None。
+    call_id: str | None = None
 
 
 @dataclass
@@ -126,8 +135,15 @@ class RunState:
     context_summary: str = ""
     summarized_message_count: int = 0
 
-    def add(self, role: str, content: str, name: str | None = None) -> None:
-        self.messages.append(Message(role, content, name))
+    def add(
+        self,
+        role: str,
+        content: str,
+        name: str | None = None,
+        tool_call_id: str | None = None,
+        tool_calls: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.messages.append(Message(role, content, name, tool_call_id, tool_calls))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
