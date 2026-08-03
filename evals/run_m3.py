@@ -17,6 +17,7 @@ from agent_kernel.adapters.tools.local import LocalToolbox
 from agent_kernel.adapters.tools.offload import OffloadingToolbox
 from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.kernel import AgentKernel
+from agent_kernel.planners.context import estimate_tokens
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.ports import ModelPort
 from agent_kernel.types import Message, ModelOutput, ToolSpec
@@ -76,13 +77,17 @@ def run_memory() -> dict:
 class ContextEvalModel(ModelPort):
     def __init__(self) -> None:
         self.prompt_chars: list[int] = []
+        self.prompt_tokens: list[int] = []
         self.summary_calls = 0
 
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> ModelOutput:
         if messages[0].content.startswith("你负责增量压缩"):
             self.summary_calls += 1
             return ModelOutput(f"增量摘要第 {self.summary_calls} 次：保留既有目标和偏好。")
-        self.prompt_chars.append(sum(len(message.content) for message in messages))
+        chars = sum(len(message.content) for message in messages)
+        tokens = sum(estimate_tokens(message.content) for message in messages)
+        self.prompt_chars.append(chars)
+        self.prompt_tokens.append(tokens)
         return ModelOutput('{"thought": "完成本轮", "final": "已记录"}')
 
 
@@ -126,13 +131,14 @@ def run_context() -> dict:
         )
 
         max_chars = max(model.prompt_chars)
+        max_tokens = max(model.prompt_tokens)
         ok = (
             state.status == "done"
             and state.turn == 50
             and model.summary_calls >= 2
             and state.summarized_message_count > 0
-            and len(state.context_summary) <= 2000
-            and max_chars <= 24000
+            and estimate_tokens(state.context_summary) <= 2000
+            and max_tokens <= 24000
             and checkpoint_ok
             and artifact_ok
         )
@@ -143,6 +149,8 @@ def run_context() -> dict:
             "summary_calls": model.summary_calls,
             "summarized_message_count": state.summarized_message_count,
             "max_prompt_chars": max_chars,
+            "max_prompt_tokens": max_tokens,
+            "context_summary_tokens": estimate_tokens(state.context_summary),
             "checkpoint_ok": checkpoint_ok,
             "artifact_ok": artifact_ok,
             "ok": ok,
