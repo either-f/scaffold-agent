@@ -57,7 +57,7 @@ class SqliteEventStore:
                     (
                         run_id,
                         event.type,
-                        json.dumps(event.payload, ensure_ascii=False),
+                        json.dumps(event.payload, ensure_ascii=False, default=str),
                         event.ts,
                         event.event_id,
                         event.schema_version,

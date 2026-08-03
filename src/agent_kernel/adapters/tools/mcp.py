@@ -291,6 +291,9 @@ class McpToolbox(ToolPort):
                 text_parts.append(f"[unsupported MCP content type: {type(content).__name__}]")
 
         text = "\n".join(text_parts)
-        if result.isError:
-            raise RuntimeError(text or "MCP 工具执行失败")
-        return ToolResult(content=text, artifacts=artifacts)
+        return ToolResult(
+            content=text or ("MCP 工具执行失败" if result.isError else ""),
+            artifacts=artifacts,
+            is_error=bool(result.isError),
+            structured_content=result.structuredContent,
+        )

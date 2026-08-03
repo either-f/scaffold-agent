@@ -186,10 +186,17 @@ class ArtifactRef:
 
 @dataclass
 class ToolResult:
-    """工具调用结果：content 是回灌给模型的文本，artifacts 是附带的结构化产物引用。"""
+    """工具调用结果：content 是回灌给模型的文本，artifacts 是附带的结构化产物引用。
+
+    is_error=True 表示本次调用失败（工具抛异常或 MCP isError），
+    structured_content 供原生返回结构化数据（如 MCP structuredContent）的工具使用，
+    二者都是附加信号，不改变 content 的语义。
+    """
 
     content: str
     artifacts: list[ArtifactRef] = field(default_factory=list)
+    is_error: bool = False
+    structured_content: Any | None = None
 
 
 @dataclass

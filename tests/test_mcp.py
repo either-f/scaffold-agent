@@ -115,14 +115,15 @@ def test_unsupported_content_type_degrades_gracefully():
     assert mapped.artifacts == []
 
 
-def test_error_result_still_raises():
-    """isError=True 时仍应抛 RuntimeError（保持原有行为）。"""
+def test_error_result_is_marked():
+    """isError=True 时保留文本并设置结构化错误标记。"""
     result = _make_mcp_result(
         content=[_make_text_content("boom")],
         is_error=True,
     )
-    with pytest.raises(RuntimeError, match="boom"):
-        McpToolbox._map_result(result)
+    mapped = McpToolbox._map_result(result)
+    assert mapped.content == "boom"
+    assert mapped.is_error is True
 
 
 def test_plain_text_content_no_artifacts():
@@ -500,4 +501,3 @@ if __name__ == "__main__":
     test_search_tools_empty_query_with_k()
     test_search_tools_k_none_returns_all_matches()
     print("OK: MCP search_tools 测试全部通过")
-

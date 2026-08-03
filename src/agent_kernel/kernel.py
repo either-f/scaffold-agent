@@ -15,6 +15,7 @@ from typing import Callable
 
 from .events import EventBus
 from .ports import CheckpointStore, EffectLedger, MemoryPort, ModelPort, PlannerPort, ToolPort
+from .schema import ToolArgumentValidationError, validate_arguments
 from .types import (
     ArtifactRef,
     Effect,
@@ -42,6 +43,17 @@ ContextVar 给 model.complete 事件补 run_id，使 CostLedger / OTel 导出在
 由 AgentKernel.run()/resume()/_drive() 在 run 生命期内设置；不并发时零开销
 （一次 set + 一次 reset）。零依赖、纯标准库。
 """
+
+
+class RunFailedError(RuntimeError):
+    """planner/model 抛异常导致 run 终结。checkpoint 已落盘，原始异常挂在 __cause__ 上，
+    供想看 traceback 的直接调用方取用；只检查 RunState 的调用方则看到 status="failed"。"""
+
+    def __init__(self, run_id: str, reason: str, cause: BaseException) -> None:
+        self.run_id = run_id
+        self.reason = reason
+        self.__cause__ = cause
+        super().__init__(f"run {run_id} 失败（{reason}）: {type(cause).__name__}")
 
 
 class EffectUnresolvedError(RuntimeError):
@@ -236,6 +248,7 @@ class AgentKernel:
                     run_id=state.run_id,
                     step=state.step,
                     answer=state.answer,
+                    reason="max_steps",
                     error_type="MaxStepsExhausted",
                     error_message=state.answer,
                 )
@@ -246,17 +259,27 @@ class AgentKernel:
 
             old_summary = state.context_summary
             old_summary_count = state.summarized_message_count
-            action = self.planner.step(state, self.model, self.tools, self.memory)
-            if (
-                state.context_summary != old_summary
-                or state.summarized_message_count != old_summary_count
-            ):
-                self._emit(
-                    "context.summarized",
-                    run_id=state.run_id,
-                    context_summary=state.context_summary,
-                    summarized_message_count=state.summarized_message_count,
+            try:
+                action = self.planner.step(state, self.model, self.tools, self.memory)
+            except Exception as exc:
+                self._emit_context_summary_if_changed(
+                    state, old_summary, old_summary_count
                 )
+                state.status = "failed"
+                state.answer = f"运行失败: {type(exc).__name__}（planner/model 调用异常）。"
+                state.last_error = state.answer
+                self._emit(
+                    "run.failed",
+                    run_id=state.run_id,
+                    step=state.step,
+                    answer=state.answer,
+                    reason="planner_exception",
+                    error_type=type(exc).__name__,
+                    error_message=state.answer,
+                )
+                self._checkpoint(state)
+                raise RunFailedError(state.run_id, "planner_exception", exc) from exc
+            self._emit_context_summary_if_changed(state, old_summary, old_summary_count)
             # 同步 model 调用可能跨过 deadline；返回后、派发工具或接受 final 前再检查一次。
             if self._check_cancel_or_deadline(state):
                 break
@@ -271,6 +294,7 @@ class AgentKernel:
             elif isinstance(action, ToolCallBatch):
                 # SPEC-88 Req3: 并行工具调用批次，顺序执行每个工具调用。
                 for tc in action.calls:
+                    self._validate_tool_call(state, tc)
                     self._emit("tool.before", run_id=state.run_id, tool=tc.name, args=tc.args)
                     if self.approval is None:
                         policy = self._effect_policy(tc.name)
@@ -281,6 +305,7 @@ class AgentKernel:
                 # 但复用 pending_tool 单步机制需要逐步 checkpoint。简化实现：直接顺序执行全部。
                 self._execute_batch(state, action)
             elif isinstance(action, ToolCall):
+                self._validate_tool_call(state, action)
                 self._emit("tool.before", run_id=state.run_id, tool=action.name, args=action.args)
                 # fail-closed：工具声明 requires_approval=True 但内核没有 approval 回调，
                 # 拒绝执行副作用（ADR-0008 的审批契约由工具自己声明，而非仅由调用方决定）。
@@ -319,6 +344,46 @@ class AgentKernel:
 
         self._emit("run.end", run_id=state.run_id, status=state.status, answer=state.answer)
         return state
+
+    def _emit_context_summary_if_changed(
+        self,
+        state: RunState,
+        old_summary: str,
+        old_summary_count: int,
+    ) -> None:
+        if (
+            state.context_summary != old_summary
+            or state.summarized_message_count != old_summary_count
+        ):
+            self._emit(
+                "context.summarized",
+                run_id=state.run_id,
+                context_summary=state.context_summary,
+                summarized_message_count=state.summarized_message_count,
+            )
+
+    def _validate_tool_call(self, state: RunState, action: ToolCall) -> None:
+        """Validate the repository's small JSON-Schema subset before effects/approval."""
+        tool_spec = next((t for t in self.tools.list_tools() if t.name == action.name), None)
+        if tool_spec is None:
+            return
+        try:
+            validate_arguments(action.name, tool_spec.parameters, action.args)
+        except ToolArgumentValidationError as exc:
+            state.status = "failed"
+            state.answer = f"运行失败: {exc}"
+            state.last_error = state.answer
+            self._emit(
+                "run.failed",
+                run_id=state.run_id,
+                step=state.step,
+                answer=state.answer,
+                reason="tool_argument_validation",
+                error_type=type(exc).__name__,
+                error_message=state.answer,
+            )
+            self._checkpoint(state)
+            raise
 
     def _check_cancel_or_deadline(self, state: RunState) -> bool:
         """SPEC-88 Req1/Req2: 检查取消回调与截止时间。
@@ -394,6 +459,7 @@ class AgentKernel:
     def _run_pending_tool(self, state: RunState) -> None:
         action = state.pending_tool
         assert action is not None
+        self._validate_tool_call(state, action)
 
         # fork-safe effect identity（SPEC-80 Req1）：fork() 会清掉 pending_effect_id，
         # 让分支上第一次 resume 走到这里时，用分支自己的 run_id 重新 propose 一行，
@@ -492,11 +558,13 @@ class AgentKernel:
         try:
             result = self.tools.call(action.name, action.args)
         except Exception as exc:  # 工具失败也要回灌上下文，让模型自己纠错
-            result = ToolResult(content=f"[tool-error] {exc}")
+            result = ToolResult(content=f"[tool-error] {exc}", is_error=True)
             if self.effects and state.pending_effect_id:
                 self.effects.mark_failed(state.pending_effect_id, result.content)
             return result
-        if self.effects and state.pending_effect_id:
+        if self.effects and state.pending_effect_id and result.is_error:
+            self.effects.mark_failed(state.pending_effect_id, result.content)
+        elif self.effects and state.pending_effect_id:
             # SPEC-80 Req7：成功时把 content + artifacts 一起 JSON 编码进 result_ref，
             # 这样崩溃恢复后回放能重建带 ArtifactRef 的 ToolResult，而不是只剩扁平文本。
             self.effects.mark_succeeded(
@@ -516,7 +584,15 @@ class AgentKernel:
         artifacts_payload = [
             {"uri": a.uri, "mime_type": a.mime_type, "description": a.description} for a in result.artifacts
         ]
-        self._emit("tool.after", run_id=state.run_id, tool=action.name, result=text, artifacts=artifacts_payload)
+        self._emit(
+            "tool.after",
+            run_id=state.run_id,
+            tool=action.name,
+            result=text,
+            artifacts=artifacts_payload,
+            is_error=result.is_error,
+            structured_content=result.structured_content,
+        )
         if action.call_id is not None:
             # 原生 tool calling 回路：assistant 消息带 tool_calls，紧接的 tool 消息带
             # 同一 tool_call_id，供 LiteLLMModel.complete 还原 provider 协议要求的形状。
@@ -554,6 +630,8 @@ class AgentKernel:
             result=text,
             artifacts=artifacts_payload,
             assistant_message=assistant_message,
+            is_error=result.is_error,
+            structured_content=result.structured_content,
         )
         self._checkpoint(state)
 
@@ -575,6 +653,8 @@ def _encode_success_result_ref(result: ToolResult) -> str:
             {"uri": a.uri, "mime_type": a.mime_type, "description": a.description}
             for a in result.artifacts
         ],
+        "is_error": result.is_error,
+        "structured_content": result.structured_content,
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -603,5 +683,10 @@ def _decode_replay_result(result_ref: str | None) -> ToolResult:
                 description=str(a.get("description", "")),
             )
         )
-    return ToolResult(content=str(payload["content"]), artifacts=artifacts)
+    return ToolResult(
+        content=str(payload["content"]),
+        artifacts=artifacts,
+        is_error=bool(payload.get("is_error", False)),
+        structured_content=payload.get("structured_content"),
+    )
 
