@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 
 from ..ports import MemoryPort, ModelPort, PlannerPort, ToolPort
-from ..types import Action, FinalAnswer, Message, ModelOutput, RunState, ToolCall
+from ..types import Action, FinalAnswer, Message, ModelOutput, RunState, ToolCall, ToolCallBatch
 from .context import ContextBuilder
 
 SYSTEM_TMPL = """你是一个会使用工具的助手。可用工具：
@@ -111,26 +111,31 @@ class ReactPlanner(PlannerPort):
         """把一次 model.complete() 的输出解析成 Action；原生 tool_calls 优先，
         否则走文本 JSON 解析，失败重试一次，仍失败抛 ActionParseError。
         返回 (action, 最终采用的 output)，供调用方（如 Plan-Execute）取 plan 文本用。
+
+        SPEC-88 Req3：模型并行发起多个 tool_calls 时，返回 ToolCallBatch 而非只取第一个。
+        单个 tool_call 时仍返回 ToolCall（保持 isinstance(action, ToolCall) 分支不变）。
         """
         if output.tool_calls:
-            # ponytail: 内核动作协议一步一动作，模型并行发起多个 tool_calls 时只取第一个；
-            # 真有并行工具调用需求时再把 Action 扩成 list。
-            call = output.tool_calls[0]
-            return (
-                ToolCall(name=call["name"], args=call.get("args", {}), call_id=call.get("id")),
-                output,
-            )
+            calls = [
+                ToolCall(name=c["name"], args=c.get("args", {}), call_id=c.get("id"))
+                for c in output.tool_calls
+            ]
+            if len(calls) == 1:
+                return calls[0], output
+            return ToolCallBatch(calls=calls), output
         try:
             return self._parse(output.text), output
         except ActionParseError:
             retry_prompt = [*prompt, Message("assistant", output.text), Message("user", RETRY_HINT)]
             retry_output = model.complete(retry_prompt, tool_specs)
             if retry_output.tool_calls:
-                call = retry_output.tool_calls[0]
-                return (
-                    ToolCall(name=call["name"], args=call.get("args", {}), call_id=call.get("id")),
-                    retry_output,
-                )
+                calls = [
+                    ToolCall(name=c["name"], args=c.get("args", {}), call_id=c.get("id"))
+                    for c in retry_output.tool_calls
+                ]
+                if len(calls) == 1:
+                    return calls[0], retry_output
+                return ToolCallBatch(calls=calls), retry_output
             return self._parse(retry_output.text), retry_output  # 第二次仍失败：直接抛出
 
     @staticmethod

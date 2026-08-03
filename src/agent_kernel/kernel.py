@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import time
 from typing import Callable
 
 from .events import EventBus
@@ -20,6 +21,7 @@ from .types import (
     FinalAnswer,
     RunState,
     ToolCall,
+    ToolCallBatch,
     ToolEffectPolicy,
     ToolResult,
     hash_arguments,
@@ -87,6 +89,16 @@ class ApprovalRequiredError(RuntimeError):
 
 
 class AgentKernel:
+    """微内核主循环。
+
+    取消与截止（SPEC-88 Req1/Req2）：
+    - ``cancel``: 协作式取消回调，每步循环顶部检查。由于 ``ModelPort.complete`` /
+      ``ToolPort.call`` 是同步阻塞调用，取消只能在步骤之间生效（cooperative），
+      不能抢占一个正在执行的 model/tool 调用——那需要线程/子进程隔离，显式超出范围。
+    - ``timeout_seconds``: 每个 ``run()`` 的墙上时钟上限，同样在步骤之间检查。
+    取消或超时后状态转为 ``"cancelled"``，checkpoint 干净，可被检查。
+    """
+
     def __init__(
         self,
         model: ModelPort,
@@ -98,6 +110,11 @@ class AgentKernel:
         approval: Approval | None = None,
         max_steps: int = 10,
         effects: EffectLedger | None = None,
+        *,
+        cancel: Callable[[], bool] | None = None,
+        timeout_seconds: float | None = None,
+        delegation_depth: int = 0,
+        max_delegation_depth: int | None = None,
     ) -> None:
         self.model = model
         self.tools = tools
@@ -108,6 +125,14 @@ class AgentKernel:
         self.approval = approval
         self.max_steps = max_steps
         self.effects = effects
+        # SPEC-88 Req1: 协作式取消回调。每次 _drive 循环顶部调用，返回 True 时终止。
+        self.cancel = cancel
+        # SPEC-88 Req2: 每次 run() 的墙上时钟截止（秒），转成 monotonic 绝对时间戳。
+        self.timeout_seconds = timeout_seconds
+        self._run_deadline: float | None = None
+        # SPEC-88 Req4: 委派深度上下文，WorkerDelegationPort 在 call() 里读取并传递。
+        self.delegation_depth = delegation_depth
+        self.max_delegation_depth = max_delegation_depth
 
     # ------------------------------------------------------------------ utils
     def _emit(self, type_: str, **payload) -> None:
@@ -140,10 +165,16 @@ class AgentKernel:
         self._emit("run.start", run_id=state.run_id, input=user_input)
         self._emit("run.started", run_id=state.run_id, turn=state.turn, input=user_input)
         self._checkpoint(state)
+        # SPEC-88 Req2: run() 入口设置 deadline（monotonic 绝对时间戳）。
+        self._run_deadline = (
+            time.monotonic() + self.timeout_seconds
+            if self.timeout_seconds is not None
+            else None
+        )
         return self._with_run_context(state, self._drive, state)
 
     def resume(self, state: RunState) -> RunState:
-        if state.status in {"done", "failed"}:
+        if state.status in {"done", "failed", "cancelled"}:
             raise ValueError(f"终态 run 不能恢复: {state.status}")
         if state.status not in {"running", "paused"}:
             raise ValueError(f"未知 run 状态: {state.status}")
@@ -155,6 +186,12 @@ class AgentKernel:
         # 分支），此处不再重复。见 SPEC-86。
         self._emit("run.resume", run_id=state.run_id, step=state.step, status=state.status)
         self._emit("run.resumed", run_id=state.run_id, step=state.step, status=state.status)
+        # SPEC-88 Req2: resume() 入口同样设置 deadline。
+        self._run_deadline = (
+            time.monotonic() + self.timeout_seconds
+            if self.timeout_seconds is not None
+            else None
+        )
         return self._with_run_context(state, self._drive, state)
 
     def _with_run_context(self, state: RunState, fn: Callable[..., RunState], *args) -> RunState:
@@ -169,8 +206,14 @@ class AgentKernel:
 
     def _drive(self, state: RunState) -> RunState:
         while state.status in {"running", "paused"}:
+            # SPEC-88 Req1/Req2: 协作式取消与截止检查，在每个循环迭代顶部生效。
+            if self._check_cancel_or_deadline(state):
+                break
             if state.pending_tool is not None:
                 self._run_pending_tool(state)
+                # SPEC-88 Req1: 工具执行完也是取消检查点（"工具结果返回后，再决定继续"）。
+                if self._check_cancel_or_deadline(state):
+                    break
                 continue
             if state.step >= self.max_steps:
                 state.status = "failed"
@@ -182,6 +225,9 @@ class AgentKernel:
             self._emit("step.start", run_id=state.run_id, step=state.step)
 
             action = self.planner.step(state, self.model, self.tools, self.memory)
+            # 同步 model 调用可能跨过 deadline；返回后、派发工具或接受 final 前再检查一次。
+            if self._check_cancel_or_deadline(state):
+                break
 
             if isinstance(action, FinalAnswer):
                 state.answer = action.content
@@ -190,6 +236,18 @@ class AgentKernel:
                 if self.memory:
                     self.memory.add(state.run_id, "assistant", action.content)
                 self._emit("run.completed", run_id=state.run_id, step=state.step, answer=action.content)
+            elif isinstance(action, ToolCallBatch):
+                # SPEC-88 Req3: 并行工具调用批次，顺序执行每个工具调用。
+                for tc in action.calls:
+                    self._emit("tool.before", run_id=state.run_id, tool=tc.name, args=tc.args)
+                    if self.approval is None:
+                        policy = self._effect_policy(tc.name)
+                        if policy is not None and policy.requires_approval:
+                            raise ApprovalRequiredError(state.run_id, tc.name)
+                # 批次内第一个工具走 pending_tool 路径，其余通过 _execute_batch_tool 顺序执行。
+                # 逐个执行：每个工具走 propose -> approve(可选) -> execute -> finish 完整流程，
+                # 但复用 pending_tool 单步机制需要逐步 checkpoint。简化实现：直接顺序执行全部。
+                self._execute_batch(state, action)
             elif isinstance(action, ToolCall):
                 self._emit("tool.before", run_id=state.run_id, tool=action.name, args=action.args)
                 # fail-closed：工具声明 requires_approval=True 但内核没有 approval 回调，
@@ -229,6 +287,77 @@ class AgentKernel:
 
         self._emit("run.end", run_id=state.run_id, status=state.status, answer=state.answer)
         return state
+
+    def _check_cancel_or_deadline(self, state: RunState) -> bool:
+        """SPEC-88 Req1/Req2: 检查取消回调与截止时间。
+
+        返回 True 表示已触发终止（状态已转为 ``"cancelled"``，checkpoint 已保存），
+        调用方应 break 循环。取消是协作式的--只在步骤之间检查，不能抢占一个
+        正在阻塞的 ``ModelPort.complete`` / ``ToolPort.call`` 调用。
+        """
+        cancelled = False
+        reason = ""
+        if self.cancel is not None and self.cancel():
+            cancelled = True
+            reason = "cancel"
+        elif self._run_deadline is not None and time.monotonic() >= self._run_deadline:
+            cancelled = True
+            reason = "timeout"
+        if cancelled:
+            state.status = "cancelled"
+            state.answer = state.answer or f"run 已{'取消' if reason == 'cancel' else '超时'}。"
+            self._emit(
+                "run.cancelled",
+                run_id=state.run_id,
+                step=state.step,
+                reason=reason,
+                answer=state.answer,
+            )
+            self._checkpoint(state)
+            return True
+        return False
+
+    def _execute_batch(self, state: RunState, batch: ToolCallBatch) -> None:
+        """SPEC-88 Req3: 顺序执行一个 ToolCallBatch 里的所有工具调用。
+
+        选择顺序执行（而非真正并发）以保持与 Effect Ledger 交互的简单性--
+        每个 call 独立 propose -> (approve) -> execute -> finish，互不干扰。
+        approval 路径下批次中任意一个被否决仍继续执行剩余工具（结果为否决提示），
+        与单工具 HITL 语义一致。
+        """
+        for index, tc in enumerate(batch.calls):
+            state.pending_tool = tc
+            state.pending_effect_id = None
+            effect_id = None
+            if self.effects:
+                effect_id = f"{state.run_id}:{state.turn}:{state.step}:{index}"
+                state.pending_effect_id = effect_id
+                self.effects.propose(
+                    Effect(
+                        effect_id,
+                        state.run_id,
+                        tc.name,
+                        hash_arguments(tc.args),
+                        idempotency_key=f"effect:{effect_id}",
+                    )
+                )
+            self._emit(
+                "tool.proposed",
+                run_id=state.run_id,
+                step=state.step,
+                tool=tc.name,
+                args=tc.args,
+                thought=tc.thought,
+                effect_id=effect_id,
+            )
+            # 批次是同一个 planner step，无法用单一 pending_tool 跨 resume 保存剩余调用；
+            # 有同步 approval 回调时逐项审批并立即执行。
+            if self.approval is not None:
+                state.status = "paused"
+            self._run_pending_tool(state)
+            # _run_pending_tool 会把 pending_tool 清空；下个 call 重新设置。
+            if self._check_cancel_or_deadline(state):
+                break
 
     def _run_pending_tool(self, state: RunState) -> None:
         action = state.pending_tool
@@ -318,6 +447,8 @@ class AgentKernel:
             if self.effects and state.pending_effect_id:
                 self.effects.mark_approved(state.pending_effect_id)
             self._checkpoint(state)  # 持久化批准；恢复后不重复询问
+            if self._check_cancel_or_deadline(state):
+                return
 
         result = self._execute_tool(state, action)
         self._finish_tool(state, action, result)

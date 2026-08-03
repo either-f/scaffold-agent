@@ -115,7 +115,20 @@ class FinalAnswer:
     thought: str = ""
 
 
-Action = Union[ToolCall, FinalAnswer]
+@dataclass
+class ToolCallBatch:
+    """单步并行工具调用批次（SPEC-88 Req3）。
+
+    模型在一次 complete() 里通过 tool_calls 返回多个工具调用时，planner 把它们
+    包成一个 ToolCallBatch，内核按顺序依次执行（true concurrent 执行可选，本实现
+    选择顺序执行以保持与 Effect Ledger 交互的简单性）。
+    """
+
+    calls: list[ToolCall]
+    thought: str = ""
+
+
+Action = Union[ToolCall, FinalAnswer, "ToolCallBatch"]
 
 
 @dataclass
@@ -179,7 +192,7 @@ class RunState:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
     messages: list[Message] = field(default_factory=list)
     step: int = 0
-    status: str = "running"  # running | done | failed | paused
+    status: str = "running"  # running | done | failed | paused | cancelled
     answer: str | None = None
     pending_tool: ToolCall | None = None
     pending_effect_id: str | None = None
@@ -232,3 +245,5 @@ class RunState:
         if schema_version < 2 and state.turn == 0:
             state.turn = 1
         return state
+
+

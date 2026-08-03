@@ -43,5 +43,8 @@ def reduce(events: list[Event], initial: RunState | None = None) -> RunState:
         elif ev.type == "run.failed":
             state.answer = p["answer"]
             state.status = "failed"
+        elif ev.type == "run.cancelled":
+            state.answer = p["answer"]
+            state.status = "cancelled"
         # tool.started / run.resumed / 其它不认识的类型：no-op，向前向后兼容
     return state
