@@ -5,10 +5,16 @@ import hashlib
 from typing import Any
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 
 class PgVectorMemory(MemoryPort):
-    """按 namespace 隔离的原消息语义记忆。"""
+    """按 namespace 隔离的原消息语义记忆。
+
+    SPEC-90：search 返回带真实余弦相似度分数的 MemoryHit（source="semantic"）；
+    identity 参数作为构造期 namespace 之上的附加过滤，使单个适配器实例可安全服务
+    多个 identity（identity 列可空，默认 None 兼容既有未分级行）。
+    """
 
     def __init__(
         self,
@@ -55,6 +61,20 @@ class PgVectorMemory(MemoryPort):
                     UNIQUE (namespace, role, content_hash)
                 )"""
             )
+            # SPEC-90: 增量加 identity 列（可空）+ 索引
+            cols = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'agent_memories'"
+                ).fetchall()
+            }
+            if "identity" not in cols:
+                conn.execute("ALTER TABLE agent_memories ADD COLUMN identity TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_agent_memories_identity "
+                "ON agent_memories(identity)"
+            )
 
     def _connect(self):
         import psycopg
@@ -82,7 +102,7 @@ class PgVectorMemory(MemoryPort):
             raise ValueError(f"embedding 维度错误：期望 {self.dimensions}")
         return [float(value) for value in vector]
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         # ponytail: 无 TTL/importance 列，跟 memory/sqlite.py、memory/graph.py 不对齐；
         # 没有可连的真实 Postgres 验证 schema 迁移，先不加，真要用时照抄那两个文件的列+过滤条件。
         content = content.strip()
@@ -104,13 +124,13 @@ class PgVectorMemory(MemoryPort):
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO agent_memories
-                   (namespace, run_id, role, content, content_hash, embedding)
-                   VALUES (%s, %s, %s, %s, %s, %s)
+                   (namespace, run_id, role, content, content_hash, embedding, identity)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (namespace, role, content_hash) DO NOTHING""",
-                (self.namespace, run_id, role, content, digest, Vector(embedding)),
+                (self.namespace, run_id, role, content, digest, Vector(embedding), identity),
             )
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         query = query.strip()
         if not query or k <= 0:
             return []
@@ -118,12 +138,33 @@ class PgVectorMemory(MemoryPort):
         from pgvector import Vector
 
         embedding = self._embed(query)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """SELECT content FROM agent_memories
+        # `<=>` 返回余弦距离（0=完全相同，2=完全相反）；相似度 = 1 - 距离。
+        # identity=None 时不按 identity 过滤；非 None 时叠加该 identity 过滤 +
+        # 兼容历史未分级行（identity IS NULL）。
+        if identity is None:
+            rows = self.conn_execute(
+                """SELECT content, run_id, 1 - (embedding <=> %s) AS score
+                   FROM agent_memories
                    WHERE namespace = %s
                    ORDER BY embedding <=> %s
                    LIMIT %s""",
-                (self.namespace, Vector(embedding), k),
-            ).fetchall()
-        return [row[0] for row in rows]
+                (Vector(embedding), self.namespace, Vector(embedding), k),
+            )
+        else:
+            rows = self.conn_execute(
+                """SELECT content, run_id, 1 - (embedding <=> %s) AS score
+                   FROM agent_memories
+                   WHERE namespace = %s AND (identity = %s OR identity IS NULL)
+                   ORDER BY embedding <=> %s
+                   LIMIT %s""",
+                (Vector(embedding), self.namespace, identity, Vector(embedding), k),
+            )
+        return [
+            MemoryHit(content, score=float(score), source="semantic", run_id=run_id)
+            for content, run_id, score in rows
+        ]
+
+    def conn_execute(self, sql: str, params: tuple):
+        """打开一次性连接执行查询并返回 rows。"""
+        with self._connect() as conn:
+            return conn.execute(sql, params).fetchall()

@@ -51,7 +51,11 @@ class PlanExecutePlanner(ReactPlanner):
             query = next((m.content for m in reversed(state.messages) if m.role == "user"), "")
             current_context = {m.content for m in state.messages}
             hits = (
-                [hit for hit in memory.search(query, k=8) if hit not in current_context][:3]
+                [
+                    hit
+                    for hit in memory.search(query, k=8)
+                    if str(hit) not in current_context
+                ][:3]
                 if query
                 else []
             )

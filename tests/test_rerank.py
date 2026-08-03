@@ -16,10 +16,10 @@ class FixedMemory(MemoryPort):
         self.items = items
         self.search_ks: list[int] = []
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         self.items.append(content)
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[str]:
         self.search_ks.append(k)
         return self.items[:k]
 

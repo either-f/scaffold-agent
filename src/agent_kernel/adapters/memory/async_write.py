@@ -23,6 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 OnError = Callable[[str, str, str, Exception], None]
 
@@ -34,8 +35,8 @@ class AsyncMemory(MemoryPort):
         self.on_error = on_error
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
 
-    def add(self, run_id: str, role: str, content: str) -> None:
-        future = self._executor.submit(self.inner.add, run_id, role, content)
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
+        future = self._executor.submit(self.inner.add, run_id, role, content, identity)
         future.add_done_callback(lambda f: self._report_error(f, run_id, role, content))
 
     def _report_error(self, future, run_id: str, role: str, content: str) -> None:
@@ -43,8 +44,8 @@ class AsyncMemory(MemoryPort):
         if exc is not None and self.on_error:
             self.on_error(run_id, role, content, exc)
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        return self.inner.search(query, k=k)
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
+        return self.inner.search(query, k=k, identity=identity)
 
     def flush(self) -> None:
         """阻塞直到所有已提交的 add() 完成——测试/优雅关闭时用，正常主循环路径

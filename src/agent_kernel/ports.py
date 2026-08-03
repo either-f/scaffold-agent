@@ -8,7 +8,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from .types import Action, Effect, Message, ModelOutput, RunState, ToolResult, ToolSpec
+from .types import Action, Effect, MemoryHit, Message, ModelOutput, RunState, ToolResult, ToolSpec
 
 
 class ModelPort(ABC):
@@ -29,13 +29,18 @@ class ToolPort(ABC):
 
 
 class MemoryPort(ABC):
-    """记忆端口。接口形态对齐 Mem0（add/search），便于日后换图谱/分层记忆。"""
+    """记忆端口。接口形态对齐 Mem0（add/search），便于日后换图谱/分层记忆。
+
+    identity 参数（SPEC-90）：可选的调用方身份/命名空间作用域键，用于多用户/多租户
+    部署隔离记忆。默认 None 保留既有单租户行为。适配器应将其作为构造期 namespace
+    之上的附加过滤条件，使单个适配器实例可安全服务多个 identity。
+    """
 
     @abstractmethod
-    def add(self, run_id: str, role: str, content: str) -> None: ...
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None: ...
 
     @abstractmethod
-    def search(self, query: str, k: int = 5) -> list[str]: ...
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]: ...
 
 
 class PlannerPort(ABC):

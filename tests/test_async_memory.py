@@ -19,21 +19,21 @@ class SlowDictMemory(MemoryPort):
         self.delay = delay
         self._lock = threading.Lock()
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         if self.delay:
             time.sleep(self.delay)
         with self._lock:
             self.items.append((run_id, role, content))
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[str]:
         return [c for _, _, c in self.items[:k]]
 
 
 class FailingMemory(MemoryPort):
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         raise RuntimeError("write failed")
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[str]:
         return []
 
 

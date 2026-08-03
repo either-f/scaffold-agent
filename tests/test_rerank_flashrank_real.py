@@ -22,10 +22,10 @@ class FixedMemory(MemoryPort):
     def __init__(self, items: list[str]) -> None:
         self.items = items
 
-    def add(self, run_id, role, content):
+    def add(self, run_id, role, content, identity=None):
         self.items.append(content)
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[str]:
         return self.items[:k]
 
 

@@ -76,12 +76,17 @@ class ReactPlanner(PlannerPort):
         if self.preferences:
             prefs = self.preferences.search(PREFERENCE_QUERY, k=self.preferences_k)
             if prefs:
+                # MemoryHit 是 str 子类，直接用其字符串值（=content）拼接
                 blocks.append("已知偏好与约束（每轮都生效）：\n" + "\n".join(f"- {p}" for p in prefs))
         if memory and state.messages:
             query = next((m.content for m in reversed(state.messages) if m.role == "user"), "")
             current_context = {m.content for m in state.messages}
             hits = (
-                [hit for hit in memory.search(query, k=8) if hit not in current_context][:3]
+                [
+                    hit
+                    for hit in memory.search(query, k=8)
+                    if str(hit) not in current_context
+                ][:3]
                 if query
                 else []
             )

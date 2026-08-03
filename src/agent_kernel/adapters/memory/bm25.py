@@ -23,6 +23,7 @@ import time
 from collections import Counter
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 K1 = 1.5
 B = 0.75
@@ -101,12 +102,18 @@ class Bm25Memory(MemoryPort):
             "is_leaf INTEGER NOT NULL DEFAULT 1, parent_id INTEGER, "
             "UNIQUE(namespace, role, content_hash))"
         )
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(bm25_docs)")}
+        if "identity" not in cols:
+            self.conn.execute("ALTER TABLE bm25_docs ADD COLUMN identity TEXT")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_bm25_identity ON bm25_docs(identity)")
+        self.conn.commit()
 
     def add(
         self,
         run_id: str,
         role: str,
         content: str,
+        identity: str | None = None,
         importance: float = 1.0,
         ttl_seconds: float | None = None,
     ) -> None:
@@ -117,9 +124,9 @@ class Bm25Memory(MemoryPort):
         expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
         self.conn.execute(
             "INSERT OR IGNORE INTO bm25_docs"
-            "(namespace, run_id, role, content, content_hash, ts, importance, expires_at) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            ("default", run_id, role, content, digest, time.time(), importance, expires_at),
+            "(namespace, run_id, role, content, content_hash, ts, identity, importance, expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            ("default", run_id, role, content, digest, time.time(), identity, importance, expires_at),
         )
         self.conn.commit()
 
@@ -129,6 +136,7 @@ class Bm25Memory(MemoryPort):
         role: str,
         parent_content: str,
         child_contents: list[str],
+        identity: str | None = None,
         importance: float = 1.0,
         ttl_seconds: float | None = None,
     ) -> None:
@@ -141,9 +149,9 @@ class Bm25Memory(MemoryPort):
         parent_digest = hashlib.sha256(parent_content.encode("utf-8")).hexdigest()
         self.conn.execute(
             "INSERT OR IGNORE INTO bm25_docs"
-            "(namespace, run_id, role, content, content_hash, ts, importance, expires_at, is_leaf, parent_id) "
-            "VALUES(?,?,?,?,?,?,?,?,0,NULL)",
-            ("default", run_id, role, parent_content, parent_digest, time.time(), importance, expires_at),
+            "(namespace, run_id, role, content, content_hash, ts, identity, importance, expires_at, is_leaf, parent_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,0,NULL)",
+            ("default", run_id, role, parent_content, parent_digest, time.time(), identity, importance, expires_at),
         )
         parent_id = self.conn.execute(
             "SELECT id FROM bm25_docs WHERE namespace=? AND role=? AND content_hash=?",
@@ -157,30 +165,37 @@ class Bm25Memory(MemoryPort):
             child_digest = hashlib.sha256(f"{parent_id}|{child}".encode("utf-8")).hexdigest()
             self.conn.execute(
                 "INSERT OR IGNORE INTO bm25_docs"
-                "(namespace, run_id, role, content, content_hash, ts, importance, expires_at, is_leaf, parent_id) "
-                "VALUES(?,?,?,?,?,?,?,?,1,?)",
-                ("default", run_id, role, child, child_digest, time.time(), importance, expires_at, parent_id),
+                "(namespace, run_id, role, content, content_hash, ts, identity, importance, expires_at, is_leaf, parent_id) "
+                "VALUES(?,?,?,?,?,?,?,?,?,1,?)",
+                ("default", run_id, role, child, child_digest, time.time(), identity, importance, expires_at, parent_id),
             )
         self.conn.commit()
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         query = query.strip()
         if not query or k <= 0:
             return []
+        identity_clause = "" if identity is None else "AND (identity = ? OR identity IS NULL) "
+        params = ["default"]
+        if identity is not None:
+            params.append(identity)
+        params.append(time.time())
         rows = self.conn.execute(
-            "SELECT id, content, importance, parent_id FROM bm25_docs "
-            "WHERE namespace=? AND is_leaf=1 AND (expires_at IS NULL OR expires_at > ?)",
-            ("default", time.time()),
+            "SELECT id, content, importance, parent_id, run_id FROM bm25_docs "
+            f"WHERE namespace=? AND is_leaf=1 {identity_clause}"
+            "AND (expires_at IS NULL OR expires_at > ?)",
+            params,
         ).fetchall()
         if not rows:
             return []
         ranked = bm25_rank(query, [(r[0], r[1], r[2]) for r in rows])
         parent_by_id = {r[0]: r[3] for r in rows}
 
-        results: list[str] = []
+        run_by_id = {r[0]: r[4] for r in rows}
+        results: list[MemoryHit] = []
         seen_parents: set[int] = set()
         parent_cache: dict[int, str] = {}
-        for doc_id, content, _score in ranked:
+        for doc_id, content, score in ranked:
             parent_id = parent_by_id[doc_id]
             if parent_id is not None:
                 if parent_id in seen_parents:
@@ -191,9 +206,9 @@ class Bm25Memory(MemoryPort):
                         "SELECT content FROM bm25_docs WHERE id=?", (parent_id,)
                     ).fetchone()
                     parent_cache[parent_id] = prow[0] if prow else content
-                results.append(parent_cache[parent_id])
+                results.append(MemoryHit(parent_cache[parent_id], score=score, source="keyword", run_id=run_by_id[doc_id]))
             else:
-                results.append(content)
+                results.append(MemoryHit(content, score=score, source="keyword", run_id=run_by_id[doc_id]))
             if len(results) >= k:
                 break
         return results

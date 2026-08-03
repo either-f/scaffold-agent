@@ -35,6 +35,33 @@ def _validate_run_id(run_id: str) -> None:
         )
 
 
+class MemoryHit(str):
+    """一条记忆检索命中。继承 str 以保持与既有字符串消费者（`in`/`==`/
+    `casefold()`/`"\n".join(...)` 等）零改动兼容，同时携带 score/source/run_id
+    等溯源信息供需要区分命中来源的调用方使用（SPEC-90）。
+
+    - score: 相似度分数；无真实分数的适配器（如关键词 LIKE）置 None，不编造假分数。
+    - source: 命中来源标签，如 "episodic" / "semantic" / "graph"。
+    - run_id: 写入该命中内容的 run_id（若已知），否则 None。
+    """
+
+    __slots__ = ("score", "source", "run_id")
+
+    def __new__(cls, content: str, *, score: float | None = None, source: str = "", run_id: str | None = None) -> "MemoryHit":
+        instance = super().__new__(cls, content)
+        instance.score = score
+        instance.source = source
+        instance.run_id = run_id
+        return instance
+
+    def __repr__(self) -> str:  # type: ignore[override]
+        return f"MemoryHit(content={str(self)!r}, score={self.score!r}, source={self.source!r}, run_id={self.run_id!r})"
+
+    @property
+    def content(self) -> str:
+        return str(self)
+
+
 @dataclass
 class Message:
     role: str  # system | user | assistant | tool

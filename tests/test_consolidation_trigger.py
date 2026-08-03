@@ -17,10 +17,10 @@ class DictMemory(MemoryPort):
     def __init__(self) -> None:
         self.items: list[tuple[str, str, str]] = []
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         self.items.append((run_id, role, content))
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[str]:
         return [c for _, _, c in self.items[:k]]
 
 

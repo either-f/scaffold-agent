@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 
 from ...ports import MemoryPort, ModelPort
-from ...types import Message
+from ...types import MemoryHit, Message
 
 DEFAULT_CASUAL_PATTERNS = [
     r"^(你好|hi+|hello|哈哈+|嗯+|哦+|好的|谢谢|嗯嗯|ok|okay)[!！。.~～\s]*$",
@@ -57,17 +57,17 @@ class IntentGatedMemory(MemoryPort):
         self.scope_k = scope_k or {}
         self.classifier_model = classifier_model
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         target = self.inner[DEFAULT_SCOPE] if isinstance(self.inner, dict) else self.inner
-        target.add(run_id, role, content)
+        target.add(run_id, role, content, identity=identity)
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         stripped = query.strip()
         if self._is_casual(stripped):
             return []
         scope = self._classify_scope_by_regex(stripped) or DEFAULT_SCOPE
         mem = self._memory_for(scope)
-        return mem.search(query, k=self.scope_k.get(scope, k))
+        return mem.search(query, k=self.scope_k.get(scope, k), identity=identity)
 
     def _is_casual(self, query: str) -> bool:
         if any(p.match(query) for p in self._casual_re):

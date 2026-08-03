@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 
 class ElasticsearchMemory(MemoryPort):
@@ -42,11 +43,12 @@ class ElasticsearchMemory(MemoryPort):
                         "run_id": {"type": "keyword"},
                         "role": {"type": "keyword"},
                         "content": {"type": "text"},
+                        "identity": {"type": "keyword"},
                     }
                 },
             )
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         content = content.strip()
         if role not in {"user", "assistant"} or not content:
             return
@@ -54,16 +56,36 @@ class ElasticsearchMemory(MemoryPort):
         self.client.index(
             index=self.namespace,
             id=digest,
-            document={"run_id": run_id, "role": role, "content": content},
+            document={"run_id": run_id, "role": role, "content": content, "identity": identity},
         )
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         query = query.strip()
         if not query or k <= 0:
             return []
+        search_query = {"match": {"content": query}}
+        if identity is not None:
+            search_query = {
+                "bool": {
+                    "must": [search_query],
+                    "should": [
+                        {"term": {"identity": identity}},
+                        {"bool": {"must_not": {"exists": {"field": "identity"}}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
         response = self.client.search(
             index=self.namespace,
-            query={"match": {"content": query}},
+            query=search_query,
             size=k,
         )
-        return [hit["_source"]["content"] for hit in response["hits"]["hits"]]
+        return [
+            MemoryHit(
+                hit["_source"]["content"],
+                score=float(hit["_score"]) if hit.get("_score") is not None else None,
+                source="keyword",
+                run_id=hit["_source"].get("run_id"),
+            )
+            for hit in response["hits"]["hits"]
+        ]
