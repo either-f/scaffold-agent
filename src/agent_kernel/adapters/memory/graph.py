@@ -10,7 +10,7 @@ import hashlib
 import sqlite3
 import time
 
-from ..ports import MemoryPort
+from ...ports import MemoryPort
 
 
 class GraphMemory(MemoryPort):
@@ -21,7 +21,8 @@ class GraphMemory(MemoryPort):
             "CREATE TABLE IF NOT EXISTS graph_facts("
             "id INTEGER PRIMARY KEY, namespace TEXT NOT NULL, run_id TEXT, "
             "role TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, "
-            "ts REAL, UNIQUE(namespace, role, content_hash))"
+            "ts REAL, importance REAL NOT NULL DEFAULT 1.0, expires_at REAL, "
+            "UNIQUE(namespace, role, content_hash))"
         )
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS graph_edges("
@@ -32,15 +33,24 @@ class GraphMemory(MemoryPort):
         )
 
     # ------------------------------------------------------ MemoryPort contract
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(
+        self,
+        run_id: str,
+        role: str,
+        content: str,
+        importance: float = 1.0,
+        ttl_seconds: float | None = None,
+    ) -> None:
         content = content.strip()
         if role not in ("user", "assistant") or not content:
             return
         digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
         self.conn.execute(
-            "INSERT OR IGNORE INTO graph_facts(namespace, run_id, role, content, content_hash, ts) "
-            "VALUES(?,?,?,?,?,?)",
-            ("default", run_id, role, content, digest, time.time()),
+            "INSERT OR IGNORE INTO graph_facts"
+            "(namespace, run_id, role, content, content_hash, ts, importance, expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            ("default", run_id, role, content, digest, time.time(), importance, expires_at),
         )
         self.conn.commit()
 
@@ -51,10 +61,22 @@ class GraphMemory(MemoryPort):
         words = sorted(query.split(), key=len, reverse=True)
         rows = self.conn.execute(
             "SELECT content FROM graph_facts WHERE namespace=? AND content LIKE ? "
-            "ORDER BY ts DESC LIMIT ?",
-            ("default", f"%{words[0]}%", k),
+            "AND (expires_at IS NULL OR expires_at > ?) "
+            "ORDER BY importance DESC, ts DESC LIMIT ?",
+            ("default", f"%{words[0]}%", time.time(), k),
         ).fetchall()
         return [r[0] for r in rows]
+
+    def prune_expired(self) -> int:
+        """TTL 生命周期管理：删除已过期事实，返回删除行数。边（graph_edges）不设 TTL——
+        关系一旦成立即视为长期结构，跟着源事实过期会撕裂演化链，ponytail: 需要边级 TTL
+        再加列，目前无场景。"""
+        cur = self.conn.execute(
+            "DELETE FROM graph_facts WHERE expires_at IS NOT NULL AND expires_at <= ?",
+            (time.time(),),
+        )
+        self.conn.commit()
+        return cur.rowcount
 
     # --------------------------------------------------------- graph edge API
     def add_edge(

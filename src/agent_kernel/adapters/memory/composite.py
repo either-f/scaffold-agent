@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from ..ports import MemoryPort
+from ...ports import MemoryPort
 
 
 class CompositeMemory(MemoryPort):

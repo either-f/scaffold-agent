@@ -13,9 +13,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from examples.run_demo import FILESYSTEM_READ_TOOLS, guard_example_fetch, m1_servers
-from agent_kernel.adapters.model_fake import FakeScriptedModel
-from agent_kernel.adapters.model_litellm import LiteLLMModel
-from agent_kernel.adapters.tools_mcp import McpToolbox
+from agent_kernel.adapters.model.fake import FakeScriptedModel
+from agent_kernel.adapters.model.litellm import LiteLLMModel
+from agent_kernel.adapters.tools.mcp import McpToolbox
 from agent_kernel.events import EventBus
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner

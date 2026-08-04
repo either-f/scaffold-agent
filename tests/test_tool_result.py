@@ -10,9 +10,9 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from agent_kernel.adapters.model_fake import FakeScriptedModel
-from agent_kernel.adapters.tools_local import LocalToolbox
-from agent_kernel.adapters.tools_offload import OffloadingToolbox
+from agent_kernel.adapters.model.fake import FakeScriptedModel
+from agent_kernel.adapters.tools.local import LocalToolbox
+from agent_kernel.adapters.tools.offload import OffloadingToolbox
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.types import ToolResult

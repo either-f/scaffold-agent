@@ -9,8 +9,8 @@ import datetime
 import operator
 from typing import Callable
 
-from ..ports import ToolPort
-from ..types import ToolResult, ToolSpec
+from ...ports import ToolPort
+from ...types import ToolResult, ToolSpec
 
 
 class LocalToolbox(ToolPort):

@@ -16,9 +16,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
 def run_worker_real() -> dict:
-    from agent_kernel.adapters.model_litellm import LiteLLMModel
-    from agent_kernel.adapters.tools_agents import WorkerDelegationPort
-    from agent_kernel.adapters.tools_local import LocalToolbox, safe_calc
+    from agent_kernel.adapters.model.litellm import LiteLLMModel
+    from agent_kernel.adapters.tools.agents import WorkerDelegationPort
+    from agent_kernel.adapters.tools.local import LocalToolbox, safe_calc
     from agent_kernel.kernel import AgentKernel
     from agent_kernel.planners.react import ReactPlanner
 

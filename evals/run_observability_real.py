@@ -18,9 +18,9 @@ def run_otel_real() -> dict:
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from agent_kernel.adapters.model_fake import FakeScriptedModel
+    from agent_kernel.adapters.model.fake import FakeScriptedModel
     from agent_kernel.adapters.observability import ObservedModel, OtelExporter
-    from agent_kernel.adapters.tools_local import LocalToolbox, safe_calc
+    from agent_kernel.adapters.tools.local import LocalToolbox, safe_calc
     from agent_kernel.events import EventBus
     from agent_kernel.kernel import AgentKernel
     from agent_kernel.planners.react import ReactPlanner

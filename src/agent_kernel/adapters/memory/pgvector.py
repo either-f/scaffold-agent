@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from ..ports import MemoryPort
+from ...ports import MemoryPort
 
 
 class PgVectorMemory(MemoryPort):
@@ -83,6 +83,8 @@ class PgVectorMemory(MemoryPort):
         return [float(value) for value in vector]
 
     def add(self, run_id: str, role: str, content: str) -> None:
+        # ponytail: 无 TTL/importance 列，跟 memory/sqlite.py、memory/graph.py 不对齐；
+        # 没有可连的真实 Postgres 验证 schema 迁移，先不加，真要用时照抄那两个文件的列+过滤条件。
         content = content.strip()
         if role not in {"user", "assistant"} or not content:
             return

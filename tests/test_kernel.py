@@ -9,8 +9,8 @@ sys.path.insert(0, "src")
 
 import pytest
 
-from agent_kernel.adapters.model_fake import FakeScriptedModel
-from agent_kernel.adapters.tools_local import LocalToolbox, default_toolbox
+from agent_kernel.adapters.model.fake import FakeScriptedModel
+from agent_kernel.adapters.tools.local import LocalToolbox, default_toolbox
 from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner

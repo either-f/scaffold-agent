@@ -13,8 +13,8 @@ from concurrent.futures import Future
 from datetime import timedelta
 from typing import Any
 
-from ..ports import ToolPort
-from ..types import ToolResult, ToolSpec
+from ...ports import ToolPort
+from ...types import ToolResult, ToolSpec
 
 Guard = Callable[[dict], None]
 

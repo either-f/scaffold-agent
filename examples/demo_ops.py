@@ -13,8 +13,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from agent_kernel.adapters.memory_sqlite import SqliteMemory
-from agent_kernel.adapters.model_fake import FakeScriptedModel
+from agent_kernel.adapters.memory.sqlite import SqliteMemory
+from agent_kernel.adapters.model.fake import FakeScriptedModel
 from agent_kernel.adapters.sandbox_docker import DockerSandbox, SandboxToolbox
 from agent_kernel.events import EventBus
 from agent_kernel.kernel import AgentKernel

@@ -247,7 +247,7 @@ DeepSeek 会话成功从 pgvector 回答项目代号 `Mercury` 与中文偏好�
 
 ## CompositeMemory：统一封装分层记忆
 
-`adapters/memory_composite.py` 的 `CompositeMemory(MemoryPort)` 把短期情景记忆（全量
+`adapters/memory/composite.py` 的 `CompositeMemory(MemoryPort)` 把短期情景记忆（全量
 最近消息，如 `SqliteMemory`）、长期语义记忆（提炼后的事实，如 `PgVectorMemory`）、
 可选图谱记忆（`GraphMemory` / `Neo4jGraphMemory`）统一封装成一个 `MemoryPort`，对
 `AgentKernel` 和 `Planner` 完全透明——它们只看到标准的 `add/search`。
@@ -315,6 +315,34 @@ $env:AGENT_MEMORY_DSN = "postgresql://agent:agent@127.0.0.1:5432/agent_memory"
 只是让抽取 prompt 只输出修正后的最新结论、不重复写入过时旧结论；各 adapter 检索按时间
 倒序，新结论排在旧结论前面——这是"软修正"，不是真删除。
 
+### TTL + Importance 生命周期
+
+`SqliteMemory` / `GraphMemory` 的 `add()` 支持可选 `importance: float = 1.0` 与
+`ttl_seconds: float | None = None`：`search()` 按 `importance DESC, ts DESC` 排序，
+且过滤掉已过期条目；`prune_expired()` 物理删除过期行，调用节奏由调用方决定（如离线
+巩固脚本跑之前调一次），内核不主动调用。`PgVectorMemory` / `Neo4jGraphMemory` 暂未
+对齐这两列（见各自源码里的 `ponytail:` 注释），没有可连的真实 Postgres/Neo4j 验证
+schema 改动，真要用时照抄 `SqliteMemory`/`GraphMemory` 的列定义与过滤条件即可。
+
+### Graph-Aware Consolidation：FOLLOWS / SIMILAR_TO / 用户画像
+
+`evals/run_consolidation.py` 传入 `graph: GraphMemory` 参数后，巩固时额外把抽取到的
+事实/偏好写入图谱，维护两类关系：
+
+- `FOLLOWS`：同一 run 内本次抽取到的多条事实按抽取顺序两两相连，代表记忆演化链。
+- `SIMILAR_TO`：新事实跟图谱里已有全部 `HAS_FACT` 事实做字符 2-gram Jaccard 相似度
+  （中文无空格分词，退化用 2-gram 词袋；ponytail: 误判/漏判换成 embedding 余弦相似度，
+  `PgVectorMemory` 已有 embedding，接进来即可），超过阈值 0.5 则连边。
+- 每条事实/偏好同时挂一条 `HAS_FACT` / `HAS_PREFERENCE` 边到 `user:{run_id}` 节点——
+  `build_profile(graph, run_id)` 读回这些边即用户画像（`run_id` 代理 user，见 ADR-0004
+  无独立 user_id 概念的既定边界）。
+
+```powershell
+.venv\Scripts\python.exe evals\run_consolidation.py --mode offline
+```
+
+`--mode offline` 自检额外验证 `build_profile` 命中、`FOLLOWS`/`SIMILAR_TO` 边均已写入。
+
 ## M4：Skill 与沙箱
 
 渐进式技能系统采用 Anthropic Agent Skills 规范（SKILL.md + 渐进披露）。技能工具
@@ -339,7 +367,7 @@ Docker 沙箱执行器通过 `--read-only --network none --cap-drop ALL --securi
 `JsonlEventRecorder` 写事件回放日志、`OtelExporter` 与 `LangfuseExporter`
 分别对接 OpenTelemetry 和 Langfuse。
 
-策略对比（离线，4 策略 × 3 用例）：
+策略对比（离线，5 策略 × 3 用例）：
 
 ```powershell
 .venv\Scripts\python.exe evals\run_m5.py
@@ -353,6 +381,31 @@ M5 策略离线基线：
 | Plan-Execute | 3/3 | 2.00 | 首步额外生成计划 |
 | CodeAct | 3/3 | 2.00 | 沙箱执行，安全隔离 |
 | LangGraph | 3/3 | 1.67 | 图适配，含 HITL 形模拟 |
+| DAG | 3/3 | 1.00 | 拓扑并行 + Harness + Race，详见下节 |
+
+### DAG 动态图 Runtime：并行调度 + Harness 容错 + Race Strategy
+
+`planners/dag.py` 的 `DagPlanner(PlannerPort)`：模型把任务拆成带 `depends_on` 的节点图，
+Kahn 拓扑排序按批执行——同批（入度为 0）的独立节点用 `ThreadPoolExecutor` 并行跑；每个
+节点套一层 Harness：`timeout` 超时控制、`max_attempts` + 指数退避重试、`fallback` 备用
+工具链；节点给 `candidates`（多个候选调用）时用 Race Strategy 并发竞速，`as_completed`
+取最快返回的成功结果。全部 DAG 内部执行发生在一次 `planner.step()` 里，kernel 只看到
+一次 `FinalAnswer`——`kernel.py`/`ports.py` 零改动，跟 `CompositeMemory` 一样是"新概念＝
+新 adapter/策略"。
+
+```powershell
+.venv\Scripts\python.exe -m pytest tests/test_dag_planner.py -v
+```
+
+`tests/test_dag_planner.py` 6 项：独立节点确实并行（计时断言，串行需要 ~0.35s、并行
+两批约 ~0.2s）、Race Strategy 取最快成功结果、Harness 重试退避后成功、fallback 链兜底、
+循环依赖不挂死（拓扑排序检测不到的节点标记跳过，不进入死循环）、无需工具的简单查询
+直接跳过整个 DAG（省一次模型调用）。
+
+坦诚声明：DAG 内部工具调用不经过 EffectLedger/HITL approval、不经过 EventBus——这两个
+横切面目前只在 kernel 的单步 `ToolCall` 路径生效，接入需要改 `PlannerPort` 契约或把
+`EffectLedger`/`bus` 一并传给 planner，当前只读工具（搜索/检索类）场景不需要。超时基于
+线程池、杀不掉线程，超时只是"不再等待"，不适合有副作用的重的工具。
 
 真实 OpenTelemetry 验证（2026-07-31）：用真实 `opentelemetry-sdk`（非 mock）+
 `InMemorySpanExporter` 跑一次完整 run，8 个 span 全部生成（`run.start`/`step.start`×2/

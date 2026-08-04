@@ -6,8 +6,8 @@
 """
 from __future__ import annotations
 
-from ..ports import SkillLoaderPort, ToolPort
-from ..types import ToolResult, ToolSpec
+from ...ports import SkillLoaderPort, ToolPort
+from ...types import ToolResult, ToolSpec
 
 LOAD_TOOL_NAME = "load_skill"
 

@@ -5,8 +5,8 @@ import hashlib
 import os
 from pathlib import Path
 
-from ..ports import ToolPort
-from ..types import ArtifactRef, ToolResult, ToolSpec
+from ...ports import ToolPort
+from ...types import ArtifactRef, ToolResult, ToolSpec
 
 
 class OffloadingToolbox(ToolPort):

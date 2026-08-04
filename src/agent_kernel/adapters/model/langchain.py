@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..ports import ModelPort
-from ..types import Message, ModelOutput, ToolSpec
+from ...ports import ModelPort
+from ...types import Message, ModelOutput, ToolSpec
 
 
 class LangChainModel(ModelPort):

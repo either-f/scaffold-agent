@@ -14,7 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 def run_langgraph_real() -> dict:
     from agent_kernel.adapters.langgraph_demo_graph import build_graph
-    from agent_kernel.adapters.tools_local import default_toolbox
+    from agent_kernel.adapters.tools.local import default_toolbox
     from agent_kernel.events import EventBus
     from agent_kernel.kernel import AgentKernel
     from agent_kernel.planners.langgraph import LangGraphPlanner

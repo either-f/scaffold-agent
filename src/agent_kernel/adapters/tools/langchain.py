@@ -5,8 +5,8 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from ..ports import ToolPort
-from ..types import ToolResult, ToolSpec
+from ...ports import ToolPort
+from ...types import ToolResult, ToolSpec
 
 
 class LangChainToolbox(ToolPort):

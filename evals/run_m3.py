@@ -13,8 +13,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from agent_kernel.adapters.tools_local import LocalToolbox
-from agent_kernel.adapters.tools_offload import OffloadingToolbox
+from agent_kernel.adapters.tools.local import LocalToolbox
+from agent_kernel.adapters.tools.offload import OffloadingToolbox
 from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
@@ -31,7 +31,7 @@ FACTS = [
 
 
 def run_memory() -> dict:
-    from agent_kernel.adapters.memory_pgvector import PgVectorMemory
+    from agent_kernel.adapters.memory.pgvector import PgVectorMemory
 
     if not os.environ.get("DASHSCOPE_API_KEY"):
         raise RuntimeError("缺少 DASHSCOPE_API_KEY")
@@ -150,8 +150,8 @@ def run_context() -> dict:
 
 
 def run_cross_session() -> dict:
-    from agent_kernel.adapters.memory_pgvector import PgVectorMemory
-    from agent_kernel.adapters.model_litellm import LiteLLMModel
+    from agent_kernel.adapters.memory.pgvector import PgVectorMemory
+    from agent_kernel.adapters.model.litellm import LiteLLMModel
 
     if not os.environ.get("DEEPSEEK_API_KEY"):
         raise RuntimeError("缺少 DEEPSEEK_API_KEY")

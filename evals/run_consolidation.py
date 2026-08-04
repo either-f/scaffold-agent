@@ -22,9 +22,67 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from agent_kernel.adapters.memory.graph import GraphMemory
 from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.ports import MemoryPort, ModelPort
 from agent_kernel.types import Message
+
+GRAPH_NAMESPACE = "default"
+REL_HAS_FACT = "HAS_FACT"
+REL_HAS_PREFERENCE = "HAS_PREFERENCE"
+REL_FOLLOWS = "FOLLOWS"  # 同一 run 内事实的抽取顺序＝演化链
+REL_SIMILAR_TO = "SIMILAR_TO"
+SIMILARITY_THRESHOLD = 0.5  # ponytail: 词袋 Jaccard 近似语义关联；误判/漏判换成
+# embedding 余弦相似度（PgVectorMemory 已有 embedding，接进来即可）再收紧阈值
+
+
+def _shingles(s: str) -> set[str]:
+    # ponytail: 中文无空格分词，退化用字符 2-gram 做词袋；英文长词一样能命中。
+    # 短句(<2 字符)整句当一个 shingle，避免空集合。
+    return {s[i : i + 2] for i in range(len(s) - 1)} or {s}
+
+
+def _jaccard(a: str, b: str) -> float:
+    sa, sb = _shingles(a), _shingles(b)
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / len(sa | sb)
+
+
+def _record_graph(graph: GraphMemory, run_id: str, facts: list[str], prefs: list[str]) -> None:
+    """Graph-Aware Consolidation：facts/preferences 除了写进 long_term/preferences，
+    还落进图谱——挂到 user 节点上（画像沉淀），并维护 FOLLOWS（同 run 内演化顺序）与
+    SIMILAR_TO（跟历史已有事实的词袋相似度）两类关系。"""
+    user_node = f"user:{run_id}"
+    prev_fact: str | None = None
+    existing = graph.search_edges(GRAPH_NAMESPACE, relation=REL_HAS_FACT, k=1000)
+    existing_facts = [obj for _, _, obj in existing]
+    for fact in facts:
+        graph.add(run_id, "assistant", fact)
+        graph.add_edge(GRAPH_NAMESPACE, user_node, REL_HAS_FACT, fact)
+        if prev_fact is not None and prev_fact != fact:
+            graph.add_edge(GRAPH_NAMESPACE, prev_fact, REL_FOLLOWS, fact)
+        for old_fact in existing_facts:
+            if old_fact != fact and _jaccard(old_fact, fact) >= SIMILARITY_THRESHOLD:
+                graph.add_edge(GRAPH_NAMESPACE, fact, REL_SIMILAR_TO, old_fact)
+        existing_facts.append(fact)
+        prev_fact = fact
+    for pref in prefs:
+        graph.add(run_id, "assistant", pref)
+        graph.add_edge(GRAPH_NAMESPACE, user_node, REL_HAS_PREFERENCE, pref)
+
+
+def build_profile(graph: GraphMemory, run_id: str) -> dict[str, list[str]]:
+    """长期用户画像沉淀：从图谱读回某 run（代理 user，见 ADR-0004 无独立 user_id 概念）
+    挂着的全部 HAS_FACT / HAS_PREFERENCE，按关系分组即画像。"""
+    neighbors = graph.get_neighbors(GRAPH_NAMESPACE, f"user:{run_id}", direction="outgoing", k=1000)
+    profile: dict[str, list[str]] = {"facts": [], "preferences": []}
+    for _subject, relation, obj, _direction in neighbors:
+        if relation == REL_HAS_FACT:
+            profile["facts"].append(obj)
+        elif relation == REL_HAS_PREFERENCE:
+            profile["preferences"].append(obj)
+    return profile
 
 EXTRACTION_PROMPT = """你负责离线记忆巩固：整理下面这段对话历史，做三件事——
 1. 提取值得长期记住的事实（项目信息、决策、结论等，不含闲聊或工具原始输出）。
@@ -48,6 +106,7 @@ def consolidate_run(
     model: ModelPort,
     long_term: MemoryPort,
     preferences: MemoryPort,
+    graph: GraphMemory | None = None,
 ) -> dict:
     dialogue = _dialogue_text(messages)
     if not dialogue.strip():
@@ -65,6 +124,8 @@ def consolidate_run(
         long_term.add(run_id, "assistant", fact)
     for pref in prefs:
         preferences.add(run_id, "assistant", pref)
+    if graph is not None:
+        _record_graph(graph, run_id, facts, prefs)
 
     return {"run_id": run_id, "facts_written": len(facts), "preferences_written": len(prefs), "skipped": False}
 
@@ -74,6 +135,7 @@ def consolidate_all(
     model: ModelPort,
     long_term: MemoryPort,
     preferences: MemoryPort,
+    graph: GraphMemory | None = None,
 ) -> dict:
     store = JsonCheckpointStore(checkpoint_root)
     run_ids = sorted(p.name for p in store.root.iterdir() if p.is_dir()) if store.root.exists() else []
@@ -82,7 +144,7 @@ def consolidate_all(
         state = store.load(run_id)
         if state is None:
             continue
-        results.append(consolidate_run(run_id, state.messages, model, long_term, preferences))
+        results.append(consolidate_run(run_id, state.messages, model, long_term, preferences, graph))
     return {
         "runs_processed": len(results),
         "total_facts": sum(r["facts_written"] for r in results),
@@ -148,14 +210,18 @@ def run_offline() -> dict:
 
         model = FixedExtractionModel(
             {
-                "consolidate-run-a": {"facts": ["项目内部代号是 Mercury。"], "preferences": []},
+                "consolidate-run-a": {
+                    "facts": ["项目内部代号是 Mercury。", "项目内部代号改叫 Mercury 二期。"],
+                    "preferences": [],
+                },
                 "consolidate-run-b": {"facts": [], "preferences": ["用户要求回复只用中文，不用表情符号。"]},
             }
         )
         long_term = DictMemory()
         preferences = DictMemory()
+        graph = GraphMemory()
 
-        report = consolidate_all(tmp, model, long_term, preferences)
+        report = consolidate_all(tmp, model, long_term, preferences, graph)
 
         fact_ok = any("Mercury" in item[2] for item in long_term.items)
         pref_ok = any("只用中文" in item[2] for item in preferences.items)
@@ -164,12 +230,24 @@ def run_offline() -> dict:
             "中文" in item[2] for item in long_term.items
         )
 
+        profile = build_profile(graph, "consolidate-run-a")
+        profile_ok = any("Mercury" in f for f in profile["facts"])
+        follows_ok = bool(
+            graph.search_edges(GRAPH_NAMESPACE, relation=REL_FOLLOWS, k=10)
+        )
+        similar_ok = bool(
+            graph.search_edges(GRAPH_NAMESPACE, relation=REL_SIMILAR_TO, k=10)
+        )
+
         ok = (
             report["runs_processed"] == 3
             and fact_ok
             and pref_ok
             and empty_skipped
             and no_cross_contamination
+            and profile_ok
+            and follows_ok
+            and similar_ok
         )
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -181,6 +259,9 @@ def run_offline() -> dict:
             "pref_ok": pref_ok,
             "empty_skipped": empty_skipped,
             "no_cross_contamination": no_cross_contamination,
+            "profile_ok": profile_ok,
+            "follows_ok": follows_ok,
+            "similar_ok": similar_ok,
             "ok": ok,
         }
 
@@ -194,9 +275,9 @@ def run_real() -> dict:
     if not os.environ.get("DASHSCOPE_API_KEY"):
         raise RuntimeError("缺少 DASHSCOPE_API_KEY")
 
-    from agent_kernel.adapters.memory_pgvector import PgVectorMemory
-    from agent_kernel.adapters.model_litellm import LiteLLMModel
-    from agent_kernel.adapters.tools_local import LocalToolbox
+    from agent_kernel.adapters.memory.pgvector import PgVectorMemory
+    from agent_kernel.adapters.model.litellm import LiteLLMModel
+    from agent_kernel.adapters.tools.local import LocalToolbox
     from agent_kernel.kernel import AgentKernel
     from agent_kernel.planners.react import ReactPlanner
     from agent_kernel.types import RunState
@@ -224,13 +305,17 @@ def run_real() -> dict:
         extraction_model = LiteLLMModel("deepseek/deepseek-chat", timeout=60, num_retries=2, temperature=0)
         long_term = PgVectorMemory(dsn, "consolidation-eval-long-term", timeout=60)
         preferences = PgVectorMemory(dsn, "consolidation-eval-preferences", timeout=60)
+        graph = GraphMemory(str(Path(tmp) / "graph.sqlite3"))
 
-        report = consolidate_all(tmp, extraction_model, long_term, preferences)
+        report = consolidate_all(tmp, extraction_model, long_term, preferences, graph)
 
         fact_hits = long_term.search("这个项目的代号是什么？", k=5)
         fact_found = any("Aurora" in hit for hit in fact_hits)
         pref_hits = preferences.search("用户的语言习惯、格式要求、风格偏好、禁忌与约束", k=5)
         pref_found = any("中文" in hit for hit in pref_hits)
+        profile_found = any(
+            "Aurora" in f for f in build_profile(graph, "consolidation-real-fact")["facts"]
+        )
 
         ok = (
             state_a.status == "done"
@@ -238,6 +323,7 @@ def run_real() -> dict:
             and report["runs_processed"] == 2
             and fact_found
             and pref_found
+            and profile_found
         )
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -247,6 +333,7 @@ def run_real() -> dict:
             "total_preferences": report["total_preferences"],
             "fact_found": fact_found,
             "pref_found": pref_found,
+            "profile_found": profile_found,
             "ok": ok,
         }
 

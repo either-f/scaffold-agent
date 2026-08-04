@@ -15,12 +15,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from agent_kernel.adapters.model_fake import FakeScriptedModel
+from agent_kernel.adapters.model.fake import FakeScriptedModel
 from agent_kernel.adapters.sandbox_docker import DockerSandbox, SandboxToolbox
-from agent_kernel.adapters.tools_local import default_toolbox
+from agent_kernel.adapters.tools.local import LocalToolbox, default_toolbox, safe_calc
 from agent_kernel.events import EventBus
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.codeact import CodeActPlanner
+from agent_kernel.planners.dag import DagPlanner
 from agent_kernel.planners.langgraph import LangGraphPlanner
 from agent_kernel.planners.plan_execute import PlanExecutePlanner
 from agent_kernel.planners.react import ReactPlanner
@@ -175,6 +176,68 @@ def _langgraph_cases() -> list[dict]:
     ]
 
 
+def _flaky_toolbox() -> LocalToolbox:
+    box = default_toolbox()
+    state = {"calls": 0}
+
+    def flaky_calc(expression: str) -> str:
+        state["calls"] += 1
+        if state["calls"] <= 1:
+            raise RuntimeError("暂时不可用")
+        return safe_calc(expression)
+
+    box.register(
+        "flaky_calc", "偶发失败的计算器（演示 Harness 重试）", flaky_calc,
+        parameters={"type": "object", "properties": {"expression": {"type": "string"}}},
+    )
+    return box
+
+
+def _dag_cases() -> list[dict]:
+    return [
+        {
+            "name": "dag-parallel-two-nodes",
+            "prompt": "同时算 2+2 和 3+3",
+            "decompose": (
+                '{"nodes": ['
+                '{"id": "n1", "tool": "calc", "args": {"expression": "2+2"}, "depends_on": []}, '
+                '{"id": "n2", "tool": "calc", "args": {"expression": "3+3"}, "depends_on": []}'
+                ']}'
+            ),
+            "synth": '{"final": "2+2=4，3+3=6"}',
+            "answer_contains": ["4", "6"],
+            "toolbox": "default",
+        },
+        {
+            "name": "dag-dependent-wave",
+            "prompt": "算两个独立算式，再汇总",
+            "decompose": (
+                '{"nodes": ['
+                '{"id": "n1", "tool": "calc", "args": {"expression": "1+1"}, "depends_on": []}, '
+                '{"id": "n2", "tool": "calc", "args": {"expression": "2+2"}, "depends_on": []}, '
+                '{"id": "n3", "tool": "now", "args": {}, "depends_on": ["n1", "n2"]}'
+                ']}'
+            ),
+            "synth": '{"final": "1+1=2，2+2=4，汇总完成"}',
+            "answer_contains": ["2", "4", "汇总"],
+            "toolbox": "default",
+        },
+        {
+            "name": "dag-harness-retry-fallback",
+            "prompt": "算一下 5*5，工具偶发不稳定",
+            "decompose": (
+                '{"nodes": ['
+                '{"id": "n1", "tool": "flaky_calc", "args": {"expression": "5*5"}, "depends_on": [], '
+                '"max_attempts": 2, "backoff_base": 0.01}'
+                ']}'
+            ),
+            "synth": '{"final": "5*5=25（首次失败，Harness 重试后成功）"}',
+            "answer_contains": ["25"],
+            "toolbox": "flaky",
+        },
+    ]
+
+
 # ----------------------------------------------------------------- runners
 def _run_react(case: dict) -> dict:
     model = FakeScriptedModel(list(case["script"]))
@@ -237,12 +300,27 @@ def _run_langgraph(case: dict) -> dict:
     return {"name": case["name"], "passed": passed, "steps": state.step, "answer": answer}
 
 
+def _run_dag(case: dict) -> dict:
+    model = FakeScriptedModel([case["decompose"], case["synth"]])
+    tools = _flaky_toolbox() if case["toolbox"] == "flaky" else default_toolbox()
+    kernel = AgentKernel(model=model, tools=tools, planner=DagPlanner())
+    state = kernel.run(case["prompt"])
+    answer = state.answer or ""
+    passed = state.status == "done" and all(
+        kw.casefold() in answer.casefold() for kw in case["answer_contains"]
+    )
+    return {"name": case["name"], "passed": passed, "steps": state.step, "answer": answer}
+
+
 # ----------------------------------------------------------------- strategy meta
 COMPLEXITY_NOTES = {
     "react": "ReAct：单步思考-动作循环，JSON 协议解析，无计划开销，步数等于工具调用+final。",
     "plan_execute": "Plan-Execute：首步额外生成计划并存入上下文，后续步骤复用 ReAct；计划不增加工具调用但增加 prompt 长度。",
     "codeact": "CodeAct：模型写 Python 代码经 Docker 沙箱执行，指令模板替换为 python_execute；沙箱安全隔离无网络无挂载。",
     "langgraph": "LangGraph：注入外部编译图，翻译图输出为 ToolCall/FinalAnswer；HITL 形态以工具分支模拟审批后执行。",
+    "dag": "DAG：任务拆解成带依赖的节点图，一次 kernel 步骤内按拓扑序分批并行执行独立节点"
+    "（ThreadPoolExecutor），节点级 Harness（超时+重试退避+fallback）与 Race Strategy"
+    "（多候选并发取最快成功）；kernel 只看到一次 FinalAnswer，step 数恒为 1，不反映内部并行节点数。",
 }
 
 
@@ -269,12 +347,14 @@ def main() -> int:
     plan_results = [_run_plan_execute(c) for c in _plan_execute_cases()]
     codeact_results = [_run_codeact(c) for c in _codeact_cases()]
     langgraph_results = [_run_langgraph(c) for c in _langgraph_cases()]
+    dag_results = [_run_dag(c) for c in _dag_cases()]
 
     strategies = [
         _strategy_report("react", react_results),
         _strategy_report("plan_execute", plan_results),
         _strategy_report("codeact", codeact_results),
         _strategy_report("langgraph", langgraph_results),
+        _strategy_report("dag", dag_results),
     ]
 
     overall_passed = sum(s["passed"] for s in strategies)

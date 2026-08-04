@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import json
 
-from ..ports import ModelPort
-from ..types import Message, ModelOutput, ToolSpec
+from ...ports import ModelPort
+from ...types import Message, ModelOutput, ToolSpec
 
 
 class LiteLLMModel(ModelPort):

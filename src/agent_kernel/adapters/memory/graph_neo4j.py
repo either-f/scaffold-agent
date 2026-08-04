@@ -11,7 +11,7 @@ import hashlib
 import time
 
 
-from ..ports import MemoryPort
+from ...ports import MemoryPort
 
 
 class Neo4jGraphMemory(MemoryPort):
@@ -46,6 +46,8 @@ class Neo4jGraphMemory(MemoryPort):
 
     # ------------------------------------------------------ MemoryPort contract
     def add(self, run_id: str, role: str, content: str) -> None:
+        # ponytail: 无 TTL/importance 属性，跟 memory/graph.py（SQLite 对照实现）不对齐；
+        # 没有可连的真实 Neo4j 验证 Cypher 改动，先不加，真要用时给 Fact 节点加同名属性+WHERE 过滤。
         content = content.strip()
         if role not in ("user", "assistant") or not content:
             return

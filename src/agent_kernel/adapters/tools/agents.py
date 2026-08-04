@@ -6,9 +6,9 @@
 """
 from __future__ import annotations
 
-from ..kernel import AgentKernel
-from ..ports import ToolPort
-from ..types import ToolResult, ToolSpec
+from ...kernel import AgentKernel
+from ...ports import ToolPort
+from ...types import ToolResult, ToolSpec
 
 
 class WorkerDelegationPort(ToolPort):

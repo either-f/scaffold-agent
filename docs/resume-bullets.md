@@ -20,8 +20,8 @@
 | HITL | 逐工具 CLI 审批 + 断点恢复 | kernel.py + checkpoint.py |
 | 观测 | OTel + Langfuse + JSONL 成本台账 | src/agent_kernel/adapters/observability.py |
 | A2A 互操作 | Agent Card + HTTP task handler | src/agent_kernel/adapters/interop_a2a.py |
-| Worker 委派 | 进程内 AgentKernel 委派 | src/agent_kernel/adapters/tools_agents.py |
-| 图谱记忆 | 实体-关系-实体三元组存储 | src/agent_kernel/adapters/memory_graph.py |
+| Worker 委派 | 进程内 AgentKernel 委派 | src/agent_kernel/adapters/tools/agents.py |
+| 图谱记忆 | 实体-关系-实体三元组存储 | src/agent_kernel/adapters/memory/graph.py |
 | CI | GitHub Actions 离线门禁 | .github/workflows/ci.yml |
 
 ## 技术特色

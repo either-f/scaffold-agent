@@ -18,7 +18,7 @@ EDGES = [
 
 
 def run_graph() -> dict:
-    from agent_kernel.adapters.memory_graph_neo4j import Neo4jGraphMemory
+    from agent_kernel.adapters.memory.graph_neo4j import Neo4jGraphMemory
 
     import os
 

@@ -9,7 +9,7 @@ sys.path.insert(0, "src")
 
 import pytest
 
-from agent_kernel.adapters.tools_local import default_toolbox
+from agent_kernel.adapters.tools.local import default_toolbox
 from agent_kernel.planners.react import ActionParseError, ReactPlanner
 from agent_kernel.ports import ModelPort
 from agent_kernel.types import ModelOutput, RunState, ToolCall

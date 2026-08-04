@@ -14,7 +14,7 @@ import pytest
 
 litellm = pytest.importorskip("litellm")
 
-from agent_kernel.adapters.model_litellm import LiteLLMModel
+from agent_kernel.adapters.model.litellm import LiteLLMModel
 from agent_kernel.types import Message, ToolSpec
 
 

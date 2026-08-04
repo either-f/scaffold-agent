@@ -11,7 +11,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from agent_kernel.adapters.memory_composite import CompositeMemory
+from agent_kernel.adapters.memory.composite import CompositeMemory
 from agent_kernel.ports import MemoryPort
 
 
