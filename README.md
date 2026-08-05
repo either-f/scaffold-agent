@@ -343,6 +343,48 @@ schema 改动，真要用时照抄 `SqliteMemory`/`GraphMemory` 的列定义与�
 
 `--mode offline` 自检额外验证 `build_profile` 命中、`FOLLOWS`/`SIMILAR_TO` 边均已写入。
 
+## Hybrid GraphRAG：向量 + BM25 关键词 + 图谱三路召回，RRF 融合
+
+三路召回器都只是标准 `MemoryPort`：`MilvusMemory`（`adapters/memory/milvus.py`，向量腿，
+真实 Milvus）、`ElasticsearchMemory`（`adapters/memory/elasticsearch.py`，关键词腿，
+BM25 是 ES 默认 similarity）、`GraphMemory`/`Neo4jGraphMemory`（图腿，已有）。
+`adapters/memory/hybrid_rag.py` 的 `HybridGraphRAG(MemoryPort)` 把三路组合起来，
+`reciprocal_rank_fusion()`（标准 RRF，k=60）融合排序，图腿额外走 `multi_hop_search()`
+BFS 多跳扩展。`add()` 只转发 vector+keyword 两路原始内容索引，graph 的实体/关系写入
+是离线 ingestion（`evals/run_hybrid_rag.py`）的职责——跟 `CompositeMemory.add()` 只落
+episodic 不重复写 semantic 同一个理由。
+
+```python
+hybrid = HybridGraphRAG(
+    vector=MilvusMemory(uri, "kb"),
+    keyword=ElasticsearchMemory(es_url, "kb"),
+    graph=Neo4jGraphMemory(uri, user, password, "kb"),
+    neighbors_fn=lambda node: graph.get_neighbors(node, "both", k=20),
+    edges_fn=lambda: graph.search_edges(k=10000),
+)
+```
+
+`evals/run_hybrid_rag.py`：`clean_markdown()`/`chunk_markdown()`（纯 stdlib 正则，标题
+切块 + 段落滑窗 overlap）清洗切片，`ENTITY_EXTRACTION_PROMPT` 驱动 LLM 抽取实体/关系
+写 `graph.add_edge()`。
+
+```powershell
+.venv\Scripts\python.exe evals\run_hybrid_rag.py --mode offline
+```
+
+`--mode offline`（`Bm25Memory` 真 BM25 算法 + `SqliteMemory` + `GraphMemory` 三路离线
+拼装）两条核心断言：① RRF 融合排序正确——同时命中向量腿与关键词腿的内容排名高于
+只命中一路的；② 多跳召回确实生效——查询词能通过两跳图扩展找到原文里完全没出现过
+的关联事实（不是摆设）。
+
+坦诚声明：`MilvusMemory`/`ElasticsearchMemory` 这次会话都**没能验证**。Milvus Lite
+（`pymilvus[milvus_lite]`）官方只发布 Linux/macOS wheel，这台 Windows 机器上装得上
+`pymilvus` 但嵌入模式连不上（已实测报 `ConnectionConfigException`）；Elasticsearch/
+真实 Neo4j 需要 `docker compose up -d elasticsearch`，这次会话 docker daemon 没起。
+跟 pgvector/neo4j 当初一样，按 ADR-0010 处理——离线 Fake（`Bm25Memory`/`GraphMemory`）
+承担 CI 回归职责，`--mode real` 留给用户自己起真实服务后手动跑。详见
+[ADR-0010](docs/adr/0010-hybrid-graphrag.md)。
+
 ## M4：Skill 与沙箱
 
 渐进式技能系统采用 Anthropic Agent Skills 规范（SKILL.md + 渐进披露）。技能工具
