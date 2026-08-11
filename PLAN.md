@@ -14,7 +14,8 @@
 3. 融合而非重造：能当依赖直接用的（LiteLLM、MCP SDK、Langfuse）就直接用；只有内核和端口定义自己写。
 
 **非目标（防烂尾红线）**
-- 不自研模型、不训模型。
+- 不自研模型架构；训模型限定为 M11 `finetune/` 独立模块的 LoRA 微调演示（不进内核、
+  不参与内核零依赖 CI 检查），内核运行时依旧零依赖、不假设任何模型经过微调。
 - M5 之前不做多 agent（行业共识：先单 agent + MCP，确有需要再上多 agent）。
 - 不做大而全 Web UI，CLI + 简单 trace 页面即可。
 - 不追求兼容所有框架，只保证"任何框架的思想都能以策略/适配器形式接入"。
@@ -250,6 +251,86 @@ agent-kernel/
 - 已完成：README 涵盖 M0-M7 全部使用说明与结果表；3 个离线确定性 demo（research/files/ops）均使用 FakeScriptedModel；asciicast v2 .cast 录制器纯标准库实现、确定性输出；简历要点见 docs/resume-bullets.md。
 - 坦诚声明：research demo 使用真实 WorkerDelegationPort 进程内委派；files demo 使用真实 pathlib 工具读取文件；ops demo 验证 Docker 命令安全参数但不启动容器。录制为确定性 asciicast（固定尺寸、单调偏移、无 timestamp）。
 - 交付物：examples/demo_{research,files,ops}.py + examples/record_demos.py + docs/demos/*.cast + docs/resume-bullets.md。CI 扩展至 M4/M5/M6 全量测试 + demo --check + 内核 AST 第三方 import 检查。
+
+### M8 mem0 真实记忆 adapter（2026-08-10）✅
+- `adapters/memory/mem0_adapter.py` 新增 `Mem0Memory(MemoryPort)`：LLM 用 mem0 官方
+  `deepseek` provider（复用 `DEEPSEEK_API_KEY`），embedder 用 `openai` provider 指向
+  DashScope OpenAI 兼容端点（复用 `DASHSCOPE_API_KEY`，`text-embedding-v4`/1024 维），
+  向量库本地 `chroma`。独立 adapter，不塞进 `CompositeMemory`——两者是整套记忆栈
+  二选一，理由见 [ADR-0011](docs/adr/0011-mem0-adapter.md)。
+- 待决问题已定：self-host（非 hosted API，零额外云端 key）；`preferences` 固定 query
+  注入路径确认 mem0 无对应机制，选 mem0 即放弃该能力，不做迁移适配。
+- 验收：`evals/run_mem0.py` 真实 add→search 往返通过，见
+  [evals/baseline-m8-mem0-real.json](evals/baseline-m8-mem0-real.json)；`pyproject.toml`
+  新增 `mem0`/`chromadb` extra；内核零改动；离线回归（`run_eval.py --mode offline`
+  30/30、`check_core_imports.py`）确认无退化。
+- 过程中发现并修复真实 bug：`add()` 把 `run_id` 塞进 `metadata` 会被 mem0 当保留
+  身份字段静默丢弃（只打 warning），mem0 其实原生支持 `run_id` 作顶层关键字参数，
+  改传顶层参数后正确生效；另默认设 `MEM0_TELEMETRY=False` 关闭 PostHog 遥测。
+
+### M9 daytona 云沙箱 adapter（2026-08-10）✅（离线单测验证，真实账号未验）
+- `adapters/sandbox_daytona.py` 新增 `DaytonaSandbox`，跟 `DockerSandbox` 同签名
+  `execute(code) -> str`。发现并修正一个前提：`ports.py` 里从来没有正式的
+  `SandboxExecutor` 抽象类（沙箱不是六端口之一），`SandboxToolbox` 靠鸭子类型接受任意
+  实现；补了个 `SandboxRunner(Protocol)` 给这份契约起名字，`SandboxToolbox` 类型标注
+  从写死 `DockerSandbox` 放宽到该 Protocol，零运行时行为变化。
+- 生命周期对齐 `docker run --rm`：`execute()` 每次建一个 ephemeral 沙箱、跑一次、删除；
+  `client_factory` 可注入（对齐 `DockerSandbox` 的 `runner` 注入点），支持离线假 client
+  单测，见 [ADR-0012](docs/adr/0012-daytona-sandbox.md)。
+- 验收：`tests/test_sandbox_daytona.py` 11 项离线单测通过（正常执行、ephemeral 参数、
+  非零退出映射 `SandboxError`、异常路径仍删除、截断、缺 key 报错）；全量回归
+  （pytest 136 项、离线 eval 30/30、`run_m5.py` 15/15 含 CodeAct/DockerSandbox 路径、
+  内核第三方 import 检查）确认无退化；`pyproject.toml` 新增 `daytona` extra；内核零改动。
+- 坦诚声明：没有真实 Daytona 账号/API key，只验证了控制流，未像 M4 Docker 那样对真实
+  基础设施逐项验证（网络出站策略、隔离边界、真实延迟）。
+
+### M10 agentscope worker 互操作（2026-08-11）✅
+- 读了 agentscope 2.x 真实 API（不是只看 GitHub 简介）：`Agent` 是自带 model+toolkit+
+  ReAct 循环的完整运行时，只暴露整轮 `reply(inputs) -> Msg`，跟 `PlannerPort` 的
+  "单步决策"契约不对齐；官方对应"多 agent 编排"的概念是 Agent Team（leader-worker），
+  语义上跟本仓库 M6 自研 `WorkerDelegationPort` 同级。结论：接成 worker，不做新 planner，
+  见 [ADR-0013](docs/adr/0013-agentscope-worker.md)。
+- `adapters/tools/agentscope_worker.py` 新增 `AgentScopeWorker`，实现新 `Worker` 协议
+  （`run(task)->str`）；`WorkerDelegationPort` 从硬编码只接受 `AgentKernel` 放宽成接受
+  `AgentKernel | Worker`，`AgentKernel` 路径逐字节保留原语义（加法式改动）。
+- 验收：`evals/run_agentscope_worker.py` 真实跑通——本仓库 `AgentKernel`（ReAct+DeepSeek）
+  通过 `WorkerDelegationPort` 把算术任务委派给真实 `agentscope.agent.Agent`
+  （`DeepSeekChatModel`）拿回正确答案，见
+  [evals/baseline-m10-agentscope-worker-real.json](evals/baseline-m10-agentscope-worker-real.json)；
+  `tests/test_worker_delegation.py` 6 项离线单测覆盖两条路径；全量回归（pytest 142 项、
+  离线 eval 30/30、内核 import 检查）无退化；`pyproject.toml` 新增 `agentscope` extra；
+  `kernel.py`/`ports.py` 零改动。
+
+### M11 微调模块（2026-08-11）✅（流水线代码完整，训练未完整跑通，见坦诚声明）
+- `finetune/` 独立目录（独立 `.venv`，Python 3.11，独立 `requirements.txt`，不进
+  `pyproject.toml`）：`data/gen_dataset.py`（复用 `SYSTEM_TMPL` 生成"ReAct 动作 JSON
+  格式对齐"训练集，真实生成 70/28 条 train/eval，train/eval 按类别分别取样避免泄漏）
+  → `train_lora.py`（`Qwen2.5-0.5B-Instruct` + `peft.LoraConfig` + `trl.SFTTrainer`）
+  → `eval_tool_format.py`（复用 `ReactPlanner._parse` 本身判定微调前后格式合法率/
+  正确率）→ `serve_openai.py`（标准库 `http.server` 实现 OpenAI 兼容端点，`LiteLLMModel`
+  零新代码对接）。原计划 Unsloth+vLLM，实测 Unsloth 强制要求 GPU、vLLM 不支持 Windows，
+  改用纯 transformers/peft/trl + 自建极简 HTTP server，见 [ADR-0015](docs/adr/0015-finetune-module.md)。
+- 坦诚声明：本机 RTX 4050 但 `download.pytorch.org` 的 cu124 轮子这次会话三次下载
+  失败/卡死，退回 CPU 训练；诊断发现 Qwen2.5 架构在这台机器上 CPU backward 异常慢
+  且非线性恶化（213 token 单样本 backward 需 485 秒，像热降频），训练循环真实跑通
+  到第 1 步但没能在会话内跑完全部 27 步，因此没有真实的微调前后对比数据、没有真实
+  serving 验证。管线代码本身（数据生成、模型加载、LoRA 包装、trainer 构造、参数
+  接线）全部经过真实运行/真实 API 签名核对，换一台 GPU 环境正常的机器预期可直接跑通。
+
+### M12 harness 强化（2026-08-11）✅（评测侧已验证；训练侧见 M11 坦诚声明）
+- 评测侧（已验证）：`evals/run_mlflow_eval.py` 直接复用 `run_eval.py` 的
+  `load_tasks`/`offline_results`，只套一层真实 `mlflow` tracking API
+  （`sqlite:///runs/mlflow.db`，不是文件后端——MLflow 3.x 文件后端已
+  maintenance-mode，真跑出来的报错，不是查文档预判的）。真实跑通：30/30 离线任务
+  全部记录进 MLflow（run/metric/table），见
+  [evals/baseline-m12-mlflow-eval-real.json](evals/baseline-m12-mlflow-eval-real.json)、
+  [ADR-0014](docs/adr/0014-mlflow-eval-harness.md)。promptfoo 没选：Node.js CLI+YAML
+  驱动，接入成本高于 MLflow 原生 Python tracking API 一行代码接现有 eval 脚本。
+- 训练侧：跟 M11 是同一套交付——`finetune/`（`gen_dataset.py`→`train_lora.py`→
+  `eval_tool_format.py`）本身就是"数据管线→训练→评测"闭环，不重复建一套；训练未
+  完整跑通的坦诚声明见 [ADR-0015](docs/adr/0015-finetune-module.md)。
+- 验收：mlflow 部分内核零改动（只新增一个 eval 脚本 + 一个 extra，`run_eval.py`
+  未改一行）；全量回归（pytest、离线 eval、内核 import 检查）无退化。
 
 ### 并行 Java 线（穿插进行）
 - J1：Spring AI 把"通知中枢"暴露成 MCP server → 成为本 agent 第一个业务插件（M1 后即可做）。

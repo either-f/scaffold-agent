@@ -368,6 +368,12 @@ hybrid = HybridGraphRAG(
 切块 + 段落滑窗 overlap）清洗切片，`ENTITY_EXTRACTION_PROMPT` 驱动 LLM 抽取实体/关系
 写 `graph.add_edge()`。
 
+`Bm25Memory` 额外支持父子索引（`add_parent_child(run_id, role, parent_content,
+child_contents)`）：小块检索、大块回灌——child 是切细的小片段，参与 BM25 打分（片段
+越小词频统计越聚焦，检索精度更高），parent 是完整上下文块，不参与打分，命中某个
+child 时 `search()` 直接把它换成 parent 的完整内容返回，不是命中的那一句碎片；同一
+parent 下多个 child 都命中时只返回一次。跟普通 `add()` 写入的独立文档共存，互不影响。
+
 ```powershell
 .venv\Scripts\python.exe evals\run_hybrid_rag.py --mode offline
 ```
@@ -567,6 +573,125 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 .venv\Scripts\python.exe -m pytest tests/ -q
 ```
 
+## M8：mem0 真实记忆 adapter
+
+`adapters/memory/mem0_adapter.py` 的 `Mem0Memory(MemoryPort)` 接真实 `mem0ai`
+（同类记忆项目 GitHub 星数最高）：LLM 用 mem0 官方 `deepseek` provider（复用
+`DEEPSEEK_API_KEY`）做单次抽取，embedder 用 `openai` provider 指向 DashScope 的
+OpenAI 兼容端点（复用 `DASHSCOPE_API_KEY`，`text-embedding-v4`/1024 维，跟
+`PgVectorMemory` 对齐），向量库用本地 `chroma`（不额外起基础设施）。跟
+`CompositeMemory` 是整套记忆栈**二选一**，不是组合——mem0 的 `add()` 内部本来就做了
+`CompositeMemory` + 离线巩固脚本手动做的"抽取+去重"，塞在一起等于重复实现，
+见 [ADR-0011](docs/adr/0011-mem0-adapter.md)。
+
+```powershell
+.tools\uv\Scripts\uv.exe sync --extra mem0
+.venv\Scripts\python.exe evals\run_mem0.py --output evals/baseline-m8-mem0-real.json
+```
+
+实测（2026-08-10）：真实 DeepSeek 抽取 + 真实 DashScope embedding + 本地 Chroma 写入/
+检索一次往返，`add("我叫 Alex，最喜欢的编程语言是 Rust")` 后 `search("用户最喜欢什么
+编程语言？")` 正确召回含 "Rust" 的抽取事实，见
+[evals/baseline-m8-mem0-real.json](evals/baseline-m8-mem0-real.json)。过程中发现并修复
+一个真实问题：最初把 `run_id` 塞进 `metadata` 传给 `add()`，mem0 把 `run_id` 当保留
+身份字段，`metadata` 里的同名键会被静默丢弃（只打 warning）；mem0 的 `add()` 其实原生
+支持 `run_id` 作为顶层关键字参数（跟 `user_id`/`agent_id` 同级的会话作用域维度），
+改传顶层参数后正确生效。另外默认关闭了 mem0 的 PostHog 用量遥测
+（`MEM0_TELEMETRY=False`，调用方在此之前显式设过其他值则尊重其选择）。
+
+局限：mem0 2.x 起图记忆能力已从开源版移除、收进付费 Platform，`Mem0Memory` 不覆盖
+图记忆场景，项目里图记忆继续由 `Neo4jGraphMemory`（M6）承担；`ReactPlanner` 的
+`preferences` 固定 query 注入路径在 mem0 上没有直接对应机制，选 mem0 隐含放弃这条
+能力。
+
+## M9：daytona 云沙箱 adapter
+
+`adapters/sandbox_daytona.py` 的 `DaytonaSandbox` 跟 `DockerSandbox`（M4）同签名
+`execute(code) -> str`，`SandboxToolbox` 换后端不用改一行——验证了`ports.py`里从来没有
+正式 `SandboxExecutor` 抽象类这件事（沙箱不是六端口之一，靠鸭子类型），补了个
+`SandboxRunner(Protocol)` 给这份契约起名字。生命周期对齐 `docker run --rm`：每次
+`execute()` 建一个 ephemeral 沙箱、跑一次、删除。详见 [ADR-0012](docs/adr/0012-daytona-sandbox.md)。
+
+```powershell
+.tools\uv\Scripts\uv.exe sync --extra daytona
+.venv\Scripts\python.exe -m pytest tests/test_sandbox_daytona.py -q
+```
+
+11 项离线单测（假 `client_factory` 注入，对齐 `DockerSandbox` 的 `runner` 注入点）验证
+控制流：正常执行、ephemeral 参数、非零退出映射 `SandboxError`、异常路径仍尝试删除、
+输出截断、缺 `DAYTONA_API_KEY` 报错。**未验证真实 Daytona 基础设施**（无可用账号），
+见坦诚声明。
+
+## M10：agentscope worker 互操作
+
+agentscope 2.x 的 `Agent` 是自带 model+toolkit+ReAct 循环的完整运行时，只暴露整轮
+`reply(inputs)->Msg`，跟 `PlannerPort` 的"单步决策"契约不对齐；agentscope 官方对应
+"多 agent 编排"的概念是 Agent Team（leader-worker），语义上跟本仓库 M6 自研
+`WorkerDelegationPort` 同级，因此接成 worker，不做新 planner，见
+[ADR-0013](docs/adr/0013-agentscope-worker.md)。
+
+`adapters/tools/agentscope_worker.py` 的 `AgentScopeWorker` 实现新的 `Worker` 协议
+（`run(task)->str`）；`WorkerDelegationPort`（`adapters/tools/agents.py`）从硬编码只接受
+`AgentKernel` 放宽成接受 `AgentKernel | Worker`，`AgentKernel` 路径逐字节保留原语义。
+
+```powershell
+.tools\uv\Scripts\uv.exe sync --extra model --extra agentscope
+.venv\Scripts\python.exe evals\run_agentscope_worker.py --output evals/baseline-m10-agentscope-worker-real.json
+```
+
+实测（2026-08-11）：本仓库 `AgentKernel`（ReAct + DeepSeek）通过 `WorkerDelegationPort`
+把"123 * 456"委派给一个真实 `agentscope.agent.Agent`（`DeepSeekChatModel` 驱动），正确
+拿回 `56088`，见
+[evals/baseline-m10-agentscope-worker-real.json](evals/baseline-m10-agentscope-worker-real.json)。
+`tests/test_worker_delegation.py` 6 项离线单测覆盖 `AgentKernel` 路径回归、新协议路径的
+正常/空答案/异常传播、内层工具透传。
+
+## M11：微调模块（finetune/，独立目录，训练未完整跑通）
+
+`finetune/`（独立 `.venv`，Python 3.11，独立 `requirements.txt`，不进
+`pyproject.toml`，不参与内核 CI 的第三方 import 检查）实现"让 0.5B 小模型更稳定输出
+`ReactPlanner` 动作 JSON 格式"的 LoRA 微调闭环：
+
+```powershell
+uv venv finetune/.venv --python 3.11
+uv pip install torch --python finetune/.venv/Scripts/python.exe   # 或 GPU 环境用 cu124 索引
+uv pip install -r finetune/requirements.txt --python finetune/.venv/Scripts/python.exe
+finetune/.venv/Scripts/python.exe finetune/data/gen_dataset.py
+finetune/.venv/Scripts/python.exe finetune/train_lora.py
+finetune/.venv/Scripts/python.exe finetune/eval_tool_format.py --output ../evals/baseline-m11-finetune-real.json
+finetune/.venv/Scripts/python.exe finetune/serve_openai.py   # 另开终端，起本地 OpenAI 兼容端点
+```
+
+原计划 Unsloth + vLLM，实测 Unsloth 导入时硬性要求 GPU、vLLM 不原生支持 Windows，
+改用纯 `transformers`+`peft`+`trl`（CPU/GPU 都能跑）+ 标准库 `http.server` 自建最小
+OpenAI 兼容端点（跟 `adapters/interop_a2a.py` 的 A2A HTTP 传输层同一模式）。
+`LiteLLMModel("openai/<name>", api_base="http://127.0.0.1:8000/v1")` 零新代码即可
+对接微调后模型。详见 [ADR-0015](docs/adr/0015-finetune-module.md)。
+
+**坦诚声明**：本机有 RTX 4050，但 `download.pytorch.org` 的 cu124 轮子这次会话三次
+下载失败/卡死，退回 CPU 训练；诊断发现 Qwen2.5 架构在这台机器上 CPU backward 异常
+慢且随长度非线性恶化（213 token 单样本 backward 需 485 秒，像热降频），训练循环
+真实跑通到第 1 步但没能在会话内跑完全部 27 步——因此没有真实的微调前后对比数据、
+没有真实 serving 验证。数据生成（真实产出 70/28 条 train/eval）、模型加载、LoRA
+包装、trainer 构造全部真实跑过、参数经真实 API 签名核对；换一台 GPU 环境正常的机器
+预期可直接跑通，不需要改代码。
+
+## M12：harness 强化（评测侧已验证，训练侧见 M11）
+
+`evals/run_mlflow_eval.py` 直接复用 `run_eval.py` 的 `load_tasks`/`offline_results`，
+套一层真实 MLflow tracking API（`sqlite:///runs/mlflow.db`——MLflow 3.x 文件后端已
+maintenance-mode，直接用会真实报错，见 [ADR-0014](docs/adr/0014-mlflow-eval-harness.md)）。
+
+```powershell
+.tools\uv\Scripts\uv.exe sync --extra mlflow
+.venv\Scripts\python.exe evals\run_mlflow_eval.py --output evals/baseline-m12-mlflow-eval-real.json
+uv run mlflow ui --backend-store-uri sqlite:///runs/mlflow.db   # 可视化查看
+```
+
+实测（2026-08-11）：30/30 离线任务全部记录进 MLflow（run/metric/table），见
+[evals/baseline-m12-mlflow-eval-real.json](evals/baseline-m12-mlflow-eval-real.json)。
+训练侧 harness 就是 M11 的 `finetune/` 数据管线→训练→评测闭环，不重复建一套。
+
 ## 回归门禁
 
 ```powershell
@@ -598,6 +723,11 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
 | M5 | 观测与策略对比 | ✅ | 4 策略 12/12 + 真实 OTel span + 真实 LangGraph StateGraph |
 | M6 | 多 Agent 与互操作 | ✅ | Worker + A2A + 图记忆（真实 Neo4j） |
 | M7 | 打包与求职物料 | ✅ | 3 个 demo + .cast + 简历 |
+| M8 | mem0 真实记忆 adapter | ✅ | 真实 DeepSeek 抽取 + DashScope embedding + 本地 Chroma 往返通过 |
+| M9 | daytona 云沙箱 adapter | ✅ | 离线单测 11/11，真实账号未验（见坦诚声明） |
+| M10 | agentscope worker 互操作 | ✅ | 真实 DeepSeek 双框架委派通过，离线单测 6/6 |
+| M11 | 微调模块 | ✅（训练未完整跑通） | 数据/管线真实验证，训练受限于本机环境，见坦诚声明 |
+| M12 | harness 强化 | ✅（评测侧） | MLflow 真实记录 30/30；训练侧同 M11 |
 
 ### 坦诚声明
 
@@ -613,6 +743,13 @@ Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.
   （2026-07-31）：`adapters/langgraph_demo_graph.py` 编译真实 `StateGraph`（4 节点 +
   条件边），`LangGraphPlanner` 驱动 final/tool/HITL 三条真实分支全部跑通，见 M5 章节。
 - **A2A**：`A2AInteropAdapter` + `create_a2a_server` 为标准库 `http.server` 实现，非官方/完整 A2A SDK。
+- **Daytona 沙箱**：`DaytonaSandbox` 只用假 `client_factory` 做过控制流单测，没有真实
+  Daytona 账号/API key，未像 M4 Docker 沙箱那样对真实基础设施（网络出站策略、隔离边界、
+  真实延迟）逐项验证，见 [ADR-0012](docs/adr/0012-daytona-sandbox.md)。
+- **微调训练**：`finetune/` 管线代码真实跑过到"训练循环启动、算完第 1 步"，但本机
+  CPU 在 Qwen2.5 架构上 backward 异常慢（非线性恶化，疑似热降频）、GPU 版 torch 这次
+  会话下载三次失败，没能在会话内跑完训练产出真实 adapter，因此没有真实的微调前后
+  对比数据、没有真实 serving 验证，见 [ADR-0015](docs/adr/0015-finetune-module.md)。
 - ~~**Worker 委派**：demo 模型为 FakeScriptedModel，非生产 LLM。~~ 已解决（2026-07-31）：
   `evals/run_worker_real.py` 用真实 DeepSeek 驱动父子两层 AgentKernel，通过。demo 本身
   仍用 FakeScriptedModel 保持确定性录制，生产证据在 eval 里。
