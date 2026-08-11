@@ -4,9 +4,12 @@
 """
 import sys
 
+import pytest
+
 sys.path.insert(0, "src")
 
-from daytona import DaytonaError
+daytona = pytest.importorskip("daytona")
+DaytonaError = daytona.DaytonaError
 
 from agent_kernel.adapters.sandbox_daytona import DaytonaSandbox
 from agent_kernel.adapters.sandbox_docker import MAX_CAPTURE_CHARS, SandboxError
