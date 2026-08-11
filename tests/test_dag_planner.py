@@ -156,6 +156,49 @@ def test_cyclic_dependency_does_not_hang_and_is_reported():
     assert "循环依赖" in planner.last_run["results"]["n2"]
 
 
+def test_on_node_done_fires_per_node_with_run_id_and_result():
+    tools = ProbeToolbox()
+    tools.register_sleep("a", 0.0, "a-done")
+    tools.register_sleep("b", 0.0, "b-done")
+    nodes = [
+        {"id": "n1", "tool": "a", "args": {}, "depends_on": []},
+        {"id": "n2", "tool": "b", "args": {}, "depends_on": ["n1"]},
+    ]
+    model = SequenceModel([_decompose_output(nodes), _synth_output()])
+    events = []
+    planner = DagPlanner(on_node_done=lambda run_id, node_id, result: events.append((run_id, node_id, result)))
+    state = RunState(run_id="run-xyz")
+
+    planner.step(state, model, tools, None)
+
+    assert set(events) == {("run-xyz", "n1", "a-done"), ("run-xyz", "n2", "b-done")}
+    # n1 是 n2 的前置依赖，必须先 resolve
+    node_ids_in_order = [nid for _, nid, _ in events]
+    assert node_ids_in_order.index("n1") < node_ids_in_order.index("n2")
+
+
+def test_on_node_done_not_called_when_query_skips_dag():
+    events = []
+    model = SequenceModel([_synth_output("直接回答")])
+    planner = DagPlanner(on_node_done=lambda run_id, node_id, result: events.append((run_id, node_id, result)))
+
+    planner.step(RunState(), model, ProbeToolbox(), None)
+
+    assert events == []
+
+
+def test_on_node_done_optional_default_none_does_not_break_execution():
+    tools = ProbeToolbox()
+    tools.register_sleep("a", 0.0, "a-done")
+    nodes = [{"id": "n1", "tool": "a", "args": {}, "depends_on": []}]
+    model = SequenceModel([_decompose_output(nodes), _synth_output()])
+    planner = DagPlanner()  # 不传 on_node_done
+
+    action = planner.step(RunState(), model, tools, None)
+
+    assert action.content == "已完成"
+
+
 def test_trivial_query_skips_dag_entirely():
     model = SequenceModel([_synth_output("不需要工具，直接回答")])
     planner = DagPlanner()
@@ -173,5 +216,8 @@ if __name__ == "__main__":
     test_harness_retries_with_backoff_then_succeeds()
     test_harness_falls_back_after_exhausting_primary()
     test_cyclic_dependency_does_not_hang_and_is_reported()
+    test_on_node_done_fires_per_node_with_run_id_and_result()
+    test_on_node_done_not_called_when_query_skips_dag()
+    test_on_node_done_optional_default_none_does_not_break_execution()
     test_trivial_query_skips_dag_entirely()
     print("OK: DagPlanner 测试全部通过")

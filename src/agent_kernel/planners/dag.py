@@ -11,9 +11,14 @@ kernel.py 完全不用改，PlannerPort 契约不变（对齐 ports.py 的扩展
   单步 ToolCall 路径生效；真要接，需要把 EffectLedger 一并传给 planner，当前用例
   （搜索/检索类只读工具）不需要。
 - 内部执行也不过 EventBus，可观测性只看得到最终 FinalAnswer；PlannerPort.step() 拿不到
-  bus，接上需要改端口契约，当前不做。
+  bus，接上需要改端口契约，当前不做。on_node_done 回调是给"节点级 checkpoint"这个更窄
+  的需求开的口子（每个节点结果一 resolve 就通知，不用等整批 DAG 跑完），比接完整
+  EventBus 轻得多，不等价于接可观测性，调用方要做审计/追踪还是得等 EventBus 打通。
 - 超时基于 ThreadPoolExecutor：Python 线程杀不掉，超时只是"不再等待"，后台线程会跑到
   自然结束——重的/有副作用的工具不适合设超时，配合只读工具使用。
+- on_node_done 只是"结果落一份存档"，不是"崩溃后跳过已完成节点继续跑"——DAG 的拆解
+  （decompose）本身依赖一次 LLM 调用，非确定性，真要支持中途恢复还得让 step() 感知
+  "哪些节点已经跑过"并跳过重新拆解，是更大的功能，当前不做。
 """
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ import json
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 from dataclasses import dataclass, field
+from typing import Callable
 
 from ..ports import MemoryPort, ModelPort, PlannerPort, ToolPort
 from ..types import Action, FinalAnswer, Message, RunState, ToolResult
@@ -59,6 +65,9 @@ class DagNode:
     backoff_base: float = 0.2
 
 
+OnNodeDone = Callable[[str, str, str], None]  # (run_id, node_id, result)
+
+
 class DagPlanner(PlannerPort):
     def __init__(
         self,
@@ -66,11 +75,13 @@ class DagPlanner(PlannerPort):
         default_timeout: float | None = None,
         default_max_attempts: int = 1,
         default_backoff_base: float = 0.2,
+        on_node_done: OnNodeDone | None = None,
     ) -> None:
         self.max_workers = max_workers
         self.default_timeout = default_timeout
         self.default_max_attempts = default_max_attempts
         self.default_backoff_base = default_backoff_base
+        self.on_node_done = on_node_done
         self.last_run: dict = {}  # ponytail: 仅供测试/调试观察，非线程安全（同实例不要并发跑多个 run）
 
     def step(
@@ -94,7 +105,7 @@ class DagPlanner(PlannerPort):
             return FinalAnswer(content=str(parsed["final"]))
 
         nodes = [self._parse_node(d) for d in parsed["nodes"]]
-        results = self._execute_dag(nodes, tools)
+        results = self._execute_dag(nodes, tools, state.run_id)
         self.last_run = {"nodes": [n.id for n in nodes], "results": dict(results)}
 
         results_text = "\n".join(f"- {node_id}: {content}" for node_id, content in results.items())
@@ -127,8 +138,10 @@ class DagPlanner(PlannerPort):
         )
 
     # ------------------------------------------------------------ execution
-    def _execute_dag(self, nodes: list[DagNode], tools: ToolPort) -> dict[str, str]:
-        """Kahn 拓扑排序分批：每批里 in-degree 为 0 的节点用线程池并行执行。"""
+    def _execute_dag(self, nodes: list[DagNode], tools: ToolPort, run_id: str) -> dict[str, str]:
+        """Kahn 拓扑排序分批：每批里 in-degree 为 0 的节点用线程池并行执行。
+        每个节点结果一 resolve 就调 on_node_done（不用等整批/整个 DAG 跑完）——
+        节点级 checkpoint 的钩子，见模块 docstring 的边界说明。"""
         by_id = {n.id: n for n in nodes}
         in_degree = {n.id: 0 for n in nodes}
         successors: dict[str, list[str]] = {n.id: [] for n in nodes}
@@ -147,8 +160,11 @@ class DagPlanner(PlannerPort):
                 futures = {ex.submit(self._run_node, by_id[nid], tools): nid for nid in wave}
                 for fut in as_completed(futures):
                     nid = futures[fut]
-                    results[nid] = fut.result()
+                    result = fut.result()
+                    results[nid] = result
                     resolved.add(nid)
+                    if self.on_node_done:
+                        self.on_node_done(run_id, nid, result)
             for nid in wave:
                 for succ in successors[nid]:
                     in_degree[succ] -= 1
