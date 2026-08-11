@@ -246,6 +246,40 @@ agent-kernel/
 - 生产推进（2026-07-30）：新增 `Neo4jGraphMemory`（`adapters/memory/graph_neo4j.py`），真实 Neo4j + Cypher 存查三元组，取代 SQLite 版本作为生产 adapter；`GraphMemory` 降级为离线 Fake。详见 [ADR-0006](docs/adr/0006-graph-memory-neo4j.md) 与 `evals/run_graph.py`。
 - 坦诚声明：A2A interop 使用 Python 标准库 `http.server` + `threading` 实现轻量 HTTP server，A2AInteropAdapter + create_a2a_server 提供 Agent Card 与 task handler，未引入 a2a-python SDK——Agent Card 为协议形态的本地格式，非 A2A 官方兼容，但完整协议握手（task status 推送、streaming、认证）仅做骨架。Worker 委派当前 "mini-kernel" 由 FakeScriptedModel 驱动，实际生产应换用 LiteLLMModel。
 
+### 扩展：运行时增强批次，概念移植自 FoxChat（2026-08-11 补交）✅
+- 背景：这 9 项此前已写完、有测试、离线全绿，但一直没提交也没写进 PLAN.md——本次
+  "全部扫一遍再分批次提交"时逐个读代码确认后补交，逐条列出而非笼统一句带过。
+- **EphemeralStatePort**（`ports.py` 新增 `StateUpdate`/`EphemeralStatePort` 横切件 +
+  `adapters/state/ephemeral.py` 的 `InMemoryEphemeralState`）：TTL 易失状态（情绪、
+  当前焦点）仲裁——过期 > 来源等级（user_explicit>runtime>summary）> confidence
+  差值 > 值是否变化，对齐 FoxChat 情绪覆盖规则，不是无脑覆盖。
+- **Token 流式输出**（`streaming.py` 的 `stream_to`/`emit_token` + `adapters/model/streaming.py`
+  的 `StreamingModelPort` + `adapters/model/litellm.py` 的 `litellm_streaming_model()`）：
+  contextvars 旁路广播，`ports.py`/`kernel.py`/`EventBus` 全程不用感知"流式"，聚合后的
+  完整文本仍同步返回给调用方；支持原生流式 `tool_calls` 分片累加。
+- **FallbackModelPort**（`adapters/model/fallback.py`）：模型调用超时 + 依次降级链，
+  全部失败抛 `AllModelsFailedError`（收集全部错误），`on_fallback` 回调观测降级事件。
+- **RerankedMemory**（`adapters/memory/rerank.py`）：粗召回（`over_fetch` 倍）+
+  Cross-Encoder 精排两段式，`flashrank_rerank_fn()` 提供真实 FlashRank 实现（对齐
+  FoxChat 同款模型 `ms-marco-MiniLM-L-12-v2`）。
+- **IntentGatedMemory**（`adapters/memory/intent_gate.py`）：检索前置分流，正则规则
+  （闲聊直接跳过检索、scope 关键词路由）+ 语义兜底（仅正则完全未命中时才问模型），
+  对齐 FoxChat 两层意图分类器；`inner` 可为单实例或 `dict[scope, MemoryPort]`。
+- **ConsolidationTriggerMemory**（`adapters/memory/consolidation_trigger.py`）：三级
+  记忆巩固触发（soft_threshold 计数 / hard_cap 强制 / 可选墙钟定时），对齐 FoxChat
+  "定时器 45s / 节点内计数 30 / 硬上限 40"，补全此前版本缺的定时一级。
+- **AsyncMemory**（`adapters/memory/async_write.py`）：`add()` 扔线程池异步执行不
+  阻塞主循环，`search()` 保持同步；`flush()` 供测试/优雅关闭时阻塞等待。
+- **BM25 父子索引**（`adapters/memory/bm25.py` 新增 `add_parent_child()`）：小块
+  （child）参与打分检索精度更高，命中后回灌完整大块（parent），同一 parent 多个
+  child 命中只返回一次；schema 新增列默认值兼容旧数据。
+- **DagPlanner `on_node_done` 回调**（`planners/dag.py`）：每个 DAG 节点结果一
+  resolve 就通知，给"节点级 checkpoint"开口子，比接完整 `EventBus` 轻；明确不是
+  "崩溃后跳过已完成节点续跑"（DAG 拆解本身非确定性，那是更大的功能）。
+- 验收：9 个独立 commit（`b1bcb84`..`9e0d44b`），每个都是"新 adapter/横切件 + 对应
+  测试"的最小闭环，全量回归 142 项 pytest 全过，内核 `kernel.py`/`ports.py` 除
+  `EphemeralStatePort` 这一处新增横切件定义外零改动。
+
 ### M7 打包与求职物料（2–3 天）✅
 - README 讲清架构故事；3 个 demo 场景录屏（研究助手 / 文件整理 / 带审批的运维操作）；简历 bullet 初稿。
 - 已完成：README 涵盖 M0-M7 全部使用说明与结果表；3 个离线确定性 demo（research/files/ops）均使用 FakeScriptedModel；asciicast v2 .cast 录制器纯标准库实现、确定性输出；简历要点见 docs/resume-bullets.md。

@@ -517,6 +517,27 @@ $env:DEEPSEEK_API_KEY = "你的密钥"
 M6 真实基线（2026-07-31）：图记忆 8/8（真实 Neo4j，见 [evals/baseline-m6-graph.json](evals/baseline-m6-graph.json)），
 Worker 委派真实 DeepSeek 双层调用通过（见 [evals/baseline-m6-worker.json](evals/baseline-m6-worker.json)）。
 
+## 运行时增强批次：概念移植自 FoxChat
+
+9 个独立 adapter/横切件，逐条对应 PLAN.md 的"扩展：运行时增强批次"，全部离线测试
+覆盖、内核零改动（除新增 `EphemeralStatePort` 定义外）：
+
+| 能力 | 文件 | 一句话 |
+|---|---|---|
+| 易失状态仲裁 | `ports.py`/`adapters/state/ephemeral.py` | TTL 状态槽位，过期>来源等级>confidence>值变化四级仲裁 |
+| Token 流式输出 | `streaming.py`/`adapters/model/streaming.py` | contextvars 旁路广播，内核路径无感知 |
+| 模型降级 | `adapters/model/fallback.py` | 超时+依次降级链，收集全部错误 |
+| 检索精排 | `adapters/memory/rerank.py` | 粗召回+FlashRank Cross-Encoder 精排 |
+| 检索分流 | `adapters/memory/intent_gate.py` | 正则规则+语义兜底两层意图分类 |
+| 记忆巩固触发 | `adapters/memory/consolidation_trigger.py` | 计数两级+可选墙钟定时三级触发 |
+| 异步写入 | `adapters/memory/async_write.py` | add() 线程池异步、不阻塞主循环 |
+| BM25 父子索引 | `adapters/memory/bm25.py` | 小块检索命中、大块回灌完整上下文 |
+| DAG 节点钩子 | `planners/dag.py` | 每节点结果一 resolve 就通知，供节点级 checkpoint |
+
+各自设计动机、边界与 ponytail 取舍写在对应文件的模块 docstring 里（都提了具体对齐
+哪个 FoxChat 设计），这里不重复展开。详见 PLAN.md 对应小节与 9 个独立 commit
+（`b1bcb84`..`9e0d44b`）。
+
 ## M7：Demo 录制与求职物料
 
 三个离线演示场景 + asciicast v2 录制器：
