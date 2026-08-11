@@ -109,3 +109,26 @@ class InteropPort(ABC):
 
     @abstractmethod
     def handle_task(self, task: dict) -> dict: ...
+
+
+@dataclass
+class StateUpdate:
+    """一次状态写入。source 决定仲裁优先级（数值越大越优先），confidence 只在
+    source 相同时才参与裁决——见 EphemeralStatePort 仲裁规则。"""
+
+    value: str
+    source: str  # 建议值 "user_explicit" | "runtime" | "summary"，也可自定义
+    confidence: float = 1.0
+    ttl_turns: int = 3
+
+
+class EphemeralStatePort(ABC):
+    """横切件：运行时易失状态（情绪、当前焦点等带 TTL 的短期状态），按
+    过期 > 来源等级 > 置信度差值 > 值变化 仲裁，而不是无脑覆盖（借鉴 FoxChat
+    情绪覆盖规则）。key 是状态槽位名（如 "emotion"），每个 run_id 独立。"""
+
+    @abstractmethod
+    def set(self, run_id: str, key: str, update: StateUpdate, turn: int) -> None: ...
+
+    @abstractmethod
+    def get(self, run_id: str, key: str, turn: int) -> StateUpdate | None: ...
