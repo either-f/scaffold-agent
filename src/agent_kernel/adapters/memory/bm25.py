@@ -7,6 +7,11 @@ BM25 后端，不是凑数的占位符——真做了词频/文档频率统计�
 
 ponytail: search() 时对 namespace 内全部文档现算 BM25 分数，O(namespace 文档数)
 全表 scan，没有倒排索引；几千文档量级够用，海量语料换真 Elasticsearch。
+
+父子索引（add_parent_child）：小块检索、大块回灌——child 是从 parent 切出的小片段，
+参与 BM25 打分（片段越小词频统计越聚焦，检索精度更高）；parent 是完整上下文块，
+不参与打分，只在某个 child 命中时替换该 child 被返回（模型需要完整上下文，不能只给
+命中的那一句话）。同一 parent 下多个 child 都命中时，parent 只返回一次。
 """
 from __future__ import annotations
 
@@ -49,13 +54,17 @@ def tokenize(text: str) -> list[str]:
     return tokens
 
 
-def bm25_rank(query: str, docs: list[tuple[str, float]]) -> list[tuple[str, float]]:
-    """docs: [(content, importance), ...]；返回按 BM25 分数（乘 importance 加权）
-    降序排列、只保留分数 > 0（有词项命中）的 [(content, score), ...]。"""
+def bm25_rank(
+    query: str, docs: list[tuple[int, str, float]]
+) -> list[tuple[int, str, float]]:
+    """docs: [(id, content, importance), ...]；返回按 BM25 分数（乘 importance 加权）
+    降序排列、只保留分数 > 0（有词项命中）的 [(id, content, score), ...]。带 id 走一圈
+    是为了父子索引查完分数后还能查回它的 parent_id，不能只靠 content 字符串反查
+    （多个 child 文本可能重复，字符串反查会撞）。"""
     query_terms = tokenize(query)
     if not query_terms or not docs:
         return []
-    doc_tokens = [tokenize(content) for content, _ in docs]
+    doc_tokens = [tokenize(content) for _, content, _ in docs]
     doc_lens = [len(t) for t in doc_tokens]
     avgdl = sum(doc_lens) / len(doc_lens) if doc_lens else 0.0
     n = len(docs)
@@ -63,8 +72,8 @@ def bm25_rank(query: str, docs: list[tuple[str, float]]) -> list[tuple[str, floa
     for tokens in doc_tokens:
         df.update(set(tokens))
 
-    scored: list[tuple[str, float]] = []
-    for (content, importance), tokens, dl in zip(docs, doc_tokens, doc_lens):
+    scored: list[tuple[int, str, float]] = []
+    for (doc_id, content, importance), tokens, dl in zip(docs, doc_tokens, doc_lens):
         tf = Counter(tokens)
         score = 0.0
         for term in query_terms:
@@ -76,8 +85,8 @@ def bm25_rank(query: str, docs: list[tuple[str, float]]) -> list[tuple[str, floa
             denom = freq + K1 * (1 - B + B * (dl / avgdl if avgdl else 1.0))
             score += idf * (freq * (K1 + 1)) / denom
         if score > 0:
-            scored.append((content, score * importance))
-    scored.sort(key=lambda cs: cs[1], reverse=True)
+            scored.append((doc_id, content, score * importance))
+    scored.sort(key=lambda cs: cs[2], reverse=True)
     return scored
 
 
@@ -89,6 +98,7 @@ class Bm25Memory(MemoryPort):
             "id INTEGER PRIMARY KEY, namespace TEXT NOT NULL, run_id TEXT, role TEXT NOT NULL, "
             "content TEXT NOT NULL, content_hash TEXT NOT NULL, ts REAL, "
             "importance REAL NOT NULL DEFAULT 1.0, expires_at REAL, "
+            "is_leaf INTEGER NOT NULL DEFAULT 1, parent_id INTEGER, "
             "UNIQUE(namespace, role, content_hash))"
         )
 
@@ -113,17 +123,80 @@ class Bm25Memory(MemoryPort):
         )
         self.conn.commit()
 
+    def add_parent_child(
+        self,
+        run_id: str,
+        role: str,
+        parent_content: str,
+        child_contents: list[str],
+        importance: float = 1.0,
+        ttl_seconds: float | None = None,
+    ) -> None:
+        """父子索引：parent_content 存成 is_leaf=0（不参与 BM25 打分，只作为命中后的
+        回灌内容），child_contents 各自存成 is_leaf=1 指向 parent（参与打分）。"""
+        parent_content = parent_content.strip()
+        if role not in ("user", "assistant") or not parent_content or not child_contents:
+            return
+        expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
+        parent_digest = hashlib.sha256(parent_content.encode("utf-8")).hexdigest()
+        self.conn.execute(
+            "INSERT OR IGNORE INTO bm25_docs"
+            "(namespace, run_id, role, content, content_hash, ts, importance, expires_at, is_leaf, parent_id) "
+            "VALUES(?,?,?,?,?,?,?,?,0,NULL)",
+            ("default", run_id, role, parent_content, parent_digest, time.time(), importance, expires_at),
+        )
+        parent_id = self.conn.execute(
+            "SELECT id FROM bm25_docs WHERE namespace=? AND role=? AND content_hash=?",
+            ("default", role, parent_digest),
+        ).fetchone()[0]
+
+        for child in child_contents:
+            child = child.strip()
+            if not child:
+                continue
+            child_digest = hashlib.sha256(f"{parent_id}|{child}".encode("utf-8")).hexdigest()
+            self.conn.execute(
+                "INSERT OR IGNORE INTO bm25_docs"
+                "(namespace, run_id, role, content, content_hash, ts, importance, expires_at, is_leaf, parent_id) "
+                "VALUES(?,?,?,?,?,?,?,?,1,?)",
+                ("default", run_id, role, child, child_digest, time.time(), importance, expires_at, parent_id),
+            )
+        self.conn.commit()
+
     def search(self, query: str, k: int = 5) -> list[str]:
         query = query.strip()
         if not query or k <= 0:
             return []
         rows = self.conn.execute(
-            "SELECT content, importance FROM bm25_docs "
-            "WHERE namespace=? AND (expires_at IS NULL OR expires_at > ?)",
+            "SELECT id, content, importance, parent_id FROM bm25_docs "
+            "WHERE namespace=? AND is_leaf=1 AND (expires_at IS NULL OR expires_at > ?)",
             ("default", time.time()),
         ).fetchall()
-        ranked = bm25_rank(query, [(r[0], r[1]) for r in rows])
-        return [content for content, _ in ranked[:k]]
+        if not rows:
+            return []
+        ranked = bm25_rank(query, [(r[0], r[1], r[2]) for r in rows])
+        parent_by_id = {r[0]: r[3] for r in rows}
+
+        results: list[str] = []
+        seen_parents: set[int] = set()
+        parent_cache: dict[int, str] = {}
+        for doc_id, content, _score in ranked:
+            parent_id = parent_by_id[doc_id]
+            if parent_id is not None:
+                if parent_id in seen_parents:
+                    continue  # 同一 parent 下别的 child 已经命中过，不重复返回
+                seen_parents.add(parent_id)
+                if parent_id not in parent_cache:
+                    prow = self.conn.execute(
+                        "SELECT content FROM bm25_docs WHERE id=?", (parent_id,)
+                    ).fetchone()
+                    parent_cache[parent_id] = prow[0] if prow else content
+                results.append(parent_cache[parent_id])
+            else:
+                results.append(content)
+            if len(results) >= k:
+                break
+        return results
 
     def prune_expired(self) -> int:
         cur = self.conn.execute(

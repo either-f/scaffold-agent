@@ -78,6 +78,42 @@ def test_bm25_no_overlap_returns_empty():
     assert bm25.search("nonexistent query terms", k=5) == []
 
 
+def test_bm25_parent_child_returns_full_parent_not_fragment():
+    bm25 = Bm25Memory()
+    parent = (
+        "Section about rocket engines: the Aurora rocket uses a methalox engine, "
+        "cost overruns delayed launch by 6 months, team lead is Li Lei."
+    )
+    children = [
+        "the Aurora rocket uses a methalox engine",
+        "cost overruns delayed launch by 6 months",
+        "team lead is Li Lei",
+    ]
+    bm25.add_parent_child("r1", "assistant", parent, children)
+
+    hits = bm25.search("methalox engine", k=5)
+    assert hits == [parent]  # 命中 child 后返回完整 parent，不是命中的那句碎片
+
+
+def test_bm25_parent_child_dedups_when_multiple_children_hit():
+    bm25 = Bm25Memory()
+    parent = "rocket engine team lead cost overrun launch delay"
+    bm25.add_parent_child(
+        "r1", "assistant", parent, ["rocket engine cost overrun", "team lead launch delay"]
+    )
+    hits = bm25.search("rocket engine team lead cost launch", k=5)
+    assert hits.count(parent) == 1  # 两个 child 都命中，parent 只返回一次
+
+
+def test_bm25_parent_child_does_not_affect_standalone_docs():
+    bm25 = Bm25Memory()
+    bm25.add_parent_child("r1", "assistant", "parent about rockets", ["rocket child fragment"])
+    bm25.add("r1", "assistant", "unrelated standalone document about weather patterns")
+    assert bm25.search("weather patterns", k=5) == [
+        "unrelated standalone document about weather patterns"
+    ]
+
+
 def test_chunk_markdown_splits_long_text_with_overlap():
     long_text = "# Heading\n" + ("word " * 300)
     chunks = chunk_markdown(long_text, max_chars=200, overlap=50)
@@ -100,6 +136,9 @@ if __name__ == "__main__":
     test_multi_hop_cyclic_graph_does_not_hang()
     test_bm25_ranks_higher_term_frequency_above_sqlite_like()
     test_bm25_no_overlap_returns_empty()
+    test_bm25_parent_child_returns_full_parent_not_fragment()
+    test_bm25_parent_child_dedups_when_multiple_children_hit()
+    test_bm25_parent_child_does_not_affect_standalone_docs()
     test_chunk_markdown_splits_long_text_with_overlap()
     test_chunk_markdown_short_text_single_chunk()
     test_chunk_markdown_empty_input()
