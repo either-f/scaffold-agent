@@ -1,0 +1,11 @@
+{
+  "generated_at": "2026-08-11T02:47:22.871022+00:00",
+  "suite": "agentscope_worker_real",
+  "parent_model": "deepseek/deepseek-chat (LiteLLMModel)",
+  "worker_model": "deepseek-chat (agentscope DeepSeekChatModel)",
+  "parent_status": "done",
+  "parent_steps": 2,
+  "answer": "123 * 456 = 56088",
+  "expected": "56088",
+  "ok": true
+}
