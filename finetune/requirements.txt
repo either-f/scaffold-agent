@@ -1,0 +1,14 @@
+# 独立环境，跟 agent-kernel/.venv 分开（本机用 finetune/.venv，Python 3.11）。
+# 安装：uv venv finetune/.venv --python 3.11
+#       uv pip install torch --python finetune/.venv/Scripts/python.exe   # PyPI 默认索引，CPU 版
+#       uv pip install -r requirements.txt --python finetune/.venv/Scripts/python.exe
+#
+# 有可用 GPU 且 download.pytorch.org 的 cu124 轮子能下得动时，换成：
+#   uv pip install torch --index-url https://download.pytorch.org/whl/cu124 --python finetune/.venv/Scripts/python.exe
+# 训练脚本本身不用改（peft/transformers/trl 会自动用上 CUDA），unsloth 可选加速层
+# 见 train_lora.py 顶部注释，本仓库这次会话因下载环境限制没验证 unsloth+CUDA 路径。
+trl
+datasets
+transformers
+accelerate
+peft
