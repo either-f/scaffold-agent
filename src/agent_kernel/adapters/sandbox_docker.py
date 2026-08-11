@@ -15,7 +15,7 @@ import base64
 import os
 import subprocess
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Callable, Protocol, Sequence
 
 from ..ports import ToolPort
 from ..types import ToolResult, ToolSpec
@@ -41,6 +41,16 @@ class SandboxLimits:
 
 class SandboxError(Exception):
     """沙箱执行失败：超时或非零退出。消息不含任何输入代码，避免泄露敏感内容。"""
+
+
+class SandboxRunner(Protocol):
+    """`SandboxToolbox` 依赖的最小契约：任何沙箱后端只需实现 execute()。
+
+    这里只是给已有的鸭子类型契约一个名字方便类型标注，不是新增抽象层——
+    `DockerSandbox`/`DaytonaSandbox` 互不知道对方存在，也不共享基类。
+    """
+
+    def execute(self, code: str) -> str: ...
 
 
 class DockerSandbox:
@@ -122,7 +132,7 @@ class SandboxToolbox(ToolPort):
         },
     )
 
-    def __init__(self, sandbox: DockerSandbox | None = None) -> None:
+    def __init__(self, sandbox: SandboxRunner | None = None) -> None:
         self.sandbox = sandbox or DockerSandbox()
 
     def list_tools(self) -> list[ToolSpec]:
