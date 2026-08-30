@@ -56,6 +56,17 @@ def _post(url: str, payload: bytes | None, headers: dict | None = None) -> tuple
             return e.code, body
 
 
+def _poll_terminal(port: int, task_id: str, timeout: float = 5) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        code, result = _get(f"http://127.0.0.1:{port}/tasks/{task_id}")
+        assert code == 200
+        if result["status"] in {"completed", "failed", "cancelled"}:
+            return result
+        time.sleep(0.01)
+    raise AssertionError(f"task {task_id} did not finish")
+
+
 def _make_adapter(name: str, handler=None) -> A2AInteropAdapter:
     return A2AInteropAdapter(
         task_handler=handler or (lambda inp: f"echo:{inp}"),
@@ -116,9 +127,9 @@ def test_two_servers_isolated_task_handling():
             json.dumps({"input": "hi"}).encode(),
             {"Content-Length": str(len(json.dumps({"input": "hi"})))},
         )
-        assert code1 == 200 and code2 == 200
-        assert r1["output"] == "A1:hi"
-        assert r2["output"] == "A2:hi"
+        assert code1 == 202 and code2 == 202
+        assert _poll_terminal(p1, r1["task_id"])["output"] == "A1:hi"
+        assert _poll_terminal(p2, r2["task_id"])["output"] == "A2:hi"
     finally:
         s1.shutdown()
         s1.server_close()
@@ -144,10 +155,11 @@ def test_task_success_no_id(server):
         body,
         {"Content-Length": str(len(body))},
     )
-    assert code == 200
-    assert result["status"] == "completed"
-    assert result["output"] == "echo:hello"
-    assert result["error"] is None
+    assert code == 202
+    assert result["status"] == "submitted"
+    completed = _poll_terminal(port, result["task_id"])
+    assert completed["output"] == "echo:hello"
+    assert completed["error"] is None
 
 
 def test_task_success_with_id(server):
@@ -158,10 +170,10 @@ def test_task_success_with_id(server):
         body,
         {"Content-Length": str(len(body))},
     )
-    assert code == 200
+    assert code == 202
     assert result["task_id"] == "t-1"
-    assert result["status"] == "completed"
-    assert result["output"] == "echo:world"
+    assert result["status"] == "submitted"
+    assert _poll_terminal(port, "t-1")["output"] == "echo:world"
 
 
 def test_completed_task_id_reused_returns_cached_result(server):
@@ -177,12 +189,13 @@ def test_completed_task_id_reused_returns_cached_result(server):
 
     body = json.dumps({"id": "dup", "input": "x"}).encode()
     c1, r1 = _post(f"http://127.0.0.1:{port}/tasks", body, {"Content-Length": str(len(body))})
+    completed = _poll_terminal(port, "dup")
     c2, r2 = _post(f"http://127.0.0.1:{port}/tasks", body, {"Content-Length": str(len(body))})
-    assert c1 == 200 and c2 == 200
+    assert c1 == 202 and c2 == 200
     # 第二次应复用缓存，handler 只被调用一次
     assert calls["n"] == 1
-    assert r1 == r2
-    assert r1["output"] == "r1:x"
+    assert completed == r2
+    assert r2["output"] == "r1:x"
 
 
 def test_malformed_json_returns_400(server):
@@ -280,7 +293,8 @@ def test_error_sanitization_does_not_leak_internal_traceback(server):
         body,
         {"Content-Length": str(len(body))},
     )
-    assert code == 200
+    assert code == 202
+    result = _poll_terminal(port, result["task_id"])
     assert result["status"] == "failed"
     assert result["output"] is None
     # 脱敏：不得泄漏内部异常文本
@@ -323,17 +337,7 @@ def test_duplicate_inflight_task_id_rejected_with_409():
     try:
         body = json.dumps({"id": "running", "input": "a"}).encode()
         hdr = {"Content-Length": str(len(body))}
-        # 用线程发起第一个请求，使其进入 in-flight
-        first_result: dict = {}
-        first_code: dict = {}
-
-        def _first():
-            first_code["c"], first_result["r"] = _post(
-                f"http://127.0.0.1:{port}/tasks", body, hdr
-            )
-
-        t = threading.Thread(target=_first, daemon=True)
-        t.start()
+        first_code, first_result = _post(f"http://127.0.0.1:{port}/tasks", body, hdr)
         # 等待 handler 真正开始执行（此时 task 已 in-flight）
         assert started.wait(timeout=5), "first task did not start"
 
@@ -344,9 +348,9 @@ def test_duplicate_inflight_task_id_rejected_with_409():
 
         # 放行第一个任务，等待其结束
         release.set()
-        t.join(timeout=5)
-        assert first_code["c"] == 200
-        assert first_result["r"]["status"] == "completed"
+        assert first_code == 202
+        assert first_result["status"] == "submitted"
+        assert _poll_terminal(port, "running")["status"] == "completed"
     finally:
         srv.shutdown()
         srv.server_close()
@@ -360,9 +364,11 @@ def test_duplicate_id_after_completion_is_allowed():
         body = json.dumps({"id": "once", "input": "v"}).encode()
         hdr = {"Content-Length": str(len(body))}
         c1, r1 = _post(f"http://127.0.0.1:{port}/tasks", body, hdr)
+        completed = _poll_terminal(port, "once")
         c2, r2 = _post(f"http://127.0.0.1:{port}/tasks", body, hdr)
-        assert c1 == 200 and c2 == 200
-        assert r1 == r2
+        assert c1 == 202 and c2 == 200
+        assert r1["status"] == "submitted"
+        assert completed == r2
     finally:
         srv.shutdown()
         srv.server_close()
@@ -377,8 +383,10 @@ def test_null_id_does_not_participate_in_dedup():
         hdr = {"Content-Length": str(len(body))}
         c1, r1 = _post(f"http://127.0.0.1:{port}/tasks", body, hdr)
         c2, r2 = _post(f"http://127.0.0.1:{port}/tasks", body, hdr)
-        assert c1 == 200 and c2 == 200
-        assert r1["status"] == "completed" and r2["status"] == "completed"
+        assert c1 == 202 and c2 == 202
+        assert r1["task_id"] != r2["task_id"]
+        assert _poll_terminal(port, r1["task_id"])["status"] == "completed"
+        assert _poll_terminal(port, r2["task_id"])["status"] == "completed"
     finally:
         srv.shutdown()
         srv.server_close()
@@ -423,25 +431,15 @@ def test_cancel_running_callback_cannot_be_preempted():
     try:
         body = json.dumps({"id": "running", "input": "q"}).encode()
         hdr = {"Content-Length": str(len(body))}
-        first_result: dict = {}
-        first_code: dict = {}
-
-        def _first():
-            first_code["c"], first_result["r"] = _post(
-                f"http://127.0.0.1:{port}/tasks", body, hdr
-            )
-
-        t = threading.Thread(target=_first, daemon=True)
-        t.start()
+        first_code, first_result = _post(f"http://127.0.0.1:{port}/tasks", body, hdr)
         # 等待回调真正开始（此时已不可抢占）。
         assert entered.wait(timeout=5), "callback did not enter"
         # 取消已运行的回调：接口返回 True（已登记），但不打断回调。
         assert ctx.cancel("running") is True
         proceed.set()
-        t.join(timeout=5)
-        assert first_code["c"] == 200
-        assert first_result["r"]["status"] == "completed"
-        assert first_result["r"]["output"] == "ran:q"
+        assert first_code == 202
+        assert first_result["status"] == "submitted"
+        assert _poll_terminal(port, "running")["status"] == "cancelled"
     finally:
         srv.shutdown()
         srv.server_close()
@@ -471,24 +469,15 @@ def test_cancel_before_callback_starts_is_representable():
     try:
         body = json.dumps({"id": "preempt", "input": "q"}).encode()
         hdr = {"Content-Length": str(len(body))}
-        first_result: dict = {}
-        first_code: dict = {}
-
-        def _first():
-            first_code["c"], first_result["r"] = _post(
-                f"http://127.0.0.1:{port}/tasks", body, hdr
-            )
-
-        t = threading.Thread(target=_first, daemon=True)
-        t.start()
+        first_code, first_result = _post(f"http://127.0.0.1:{port}/tasks", body, hdr)
         # 抢在回调业务逻辑前请求取消（回调可能已进入但被 gate 阻塞）。
         time.sleep(0.05)
         ctx.cancel("preempt")
         # 放行 gate，避免未被取消的回调挂死。
         gate.set()
-        t.join(timeout=5)
-        assert first_code["c"] == 200
-        assert first_result["r"]["status"] in ("canceled", "completed")
+        assert first_code == 202
+        assert first_result["status"] == "submitted"
+        assert _poll_terminal(port, "preempt")["status"] == "cancelled"
     finally:
         srv.shutdown()
         srv.server_close()
