@@ -66,11 +66,15 @@ class ReactPlanner(PlannerPort):
         memory: MemoryPort | None,
     ) -> Action:
         tool_specs = tools.list_tools()
-        tool_desc = "\n".join(
-            f"- {t.name}: {t.description}; 参数 JSON Schema: "
-            f"{json.dumps(t.parameters, ensure_ascii=False)}"
-            for t in tool_specs
-        ) or "(无)"
+        if getattr(model, "supports_native_tools", False):
+            # 完整 schema 已经由 ModelPort 的原生 tools 通道发送，prompt 只保留短清单。
+            tool_desc = "\n".join(f"- {t.name}: {t.description}" for t in tool_specs) or "(无)"
+        else:
+            tool_desc = "\n".join(
+                f"- {t.name}: {t.description}; 参数 JSON Schema: "
+                f"{json.dumps(t.parameters, ensure_ascii=False)}"
+                for t in tool_specs
+            ) or "(无)"
 
         blocks: list[str] = []
         if self.preferences:

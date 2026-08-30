@@ -13,6 +13,8 @@ from .streaming import StreamChunk, StreamingModelPort, ToolCallDelta
 
 
 class LiteLLMModel(ModelPort):
+    supports_native_tools = True
+
     def __init__(self, model: str, **kwargs) -> None:
         try:
             import litellm  # noqa: F401

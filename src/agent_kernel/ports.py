@@ -12,7 +12,13 @@ from .types import Action, Effect, MemoryHit, Message, ModelOutput, RunState, To
 
 
 class ModelPort(ABC):
-    """模型端口。换模型/厂商 = 换 adapter（如 LiteLLM）。"""
+    """模型端口。换模型/厂商 = 换 adapter（如 LiteLLM）。
+
+    ``supports_native_tools`` 告诉 planner 是否已通过 provider 的原生 ``tools=``
+    通道发送完整 schema。文本模型沿用默认值 False。
+    """
+
+    supports_native_tools: bool = False
 
     @abstractmethod
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> ModelOutput: ...

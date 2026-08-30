@@ -38,6 +38,11 @@ class FallbackModelPort(ModelPort):
         self.timeout = timeout
         self.on_fallback = on_fallback
 
+    @property
+    def supports_native_tools(self) -> bool:
+        # planner 在调用前无法知道最终会落到哪一路；只有全部后端都原生支持时才可省略 schema。
+        return all(model.supports_native_tools for model in self.chain)
+
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> ModelOutput:
         errors: list[Exception] = []
         for i, model in enumerate(self.chain):

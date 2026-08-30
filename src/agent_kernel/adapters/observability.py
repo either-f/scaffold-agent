@@ -35,6 +35,10 @@ class ObservedModel(ModelPort):
         self.model = model
         self.bus = bus
 
+    @property
+    def supports_native_tools(self) -> bool:
+        return self.model.supports_native_tools
+
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> ModelOutput:
         started = time.perf_counter()
         output = self.model.complete(messages, tools)
