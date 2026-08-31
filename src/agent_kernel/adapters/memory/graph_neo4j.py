@@ -56,8 +56,9 @@ class Neo4jGraphMemory(MemoryPort):
         content = content.strip()
         if role not in ("user", "assistant") or not content:
             return
+        dedup_identity = "" if identity is None else identity
         digest = hashlib.sha256(
-            f"{self.namespace}|{role}|{content}".encode("utf-8")
+            f"{self.namespace}|{dedup_identity}|{role}|{content}".encode("utf-8")
         ).hexdigest()
         with self.driver.session() as session:
             session.run(

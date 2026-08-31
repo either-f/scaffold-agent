@@ -120,7 +120,8 @@ class Bm25Memory(MemoryPort):
         content = content.strip()
         if role not in ("user", "assistant") or not content:
             return
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        dedup_content = content if identity is None else f"{identity}\0{content}"
+        digest = hashlib.sha256(dedup_content.encode("utf-8")).hexdigest()
         expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
         self.conn.execute(
             "INSERT OR IGNORE INTO bm25_docs"
@@ -146,7 +147,8 @@ class Bm25Memory(MemoryPort):
         if role not in ("user", "assistant") or not parent_content or not child_contents:
             return
         expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
-        parent_digest = hashlib.sha256(parent_content.encode("utf-8")).hexdigest()
+        dedup_content = parent_content if identity is None else f"{identity}\0{parent_content}"
+        parent_digest = hashlib.sha256(dedup_content.encode("utf-8")).hexdigest()
         self.conn.execute(
             "INSERT OR IGNORE INTO bm25_docs"
             "(namespace, run_id, role, content, content_hash, ts, identity, importance, expires_at, is_leaf, parent_id) "

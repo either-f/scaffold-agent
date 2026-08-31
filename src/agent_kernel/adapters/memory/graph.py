@@ -56,7 +56,8 @@ class GraphMemory(MemoryPort):
         content = content.strip()
         if role not in ("user", "assistant") or not content:
             return
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        dedup_content = content if identity is None else f"{identity}\0{content}"
+        digest = hashlib.sha256(dedup_content.encode("utf-8")).hexdigest()
         expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
         self.conn.execute(
             "INSERT OR IGNORE INTO graph_facts"

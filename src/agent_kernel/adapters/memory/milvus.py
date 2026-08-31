@@ -83,7 +83,8 @@ class MilvusMemory(MemoryPort):
         if role not in {"user", "assistant"} or not content:
             return
 
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        dedup_content = content if identity is None else f"{identity}\0{content}"
+        digest = hashlib.sha256(dedup_content.encode("utf-8")).hexdigest()
         exists = self.client.query(
             collection_name=self.namespace,
             filter=f'content_hash == "{digest}"',

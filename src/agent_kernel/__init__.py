@@ -47,11 +47,7 @@ def _resolve_version() -> str:
         # editable/未安装的 dev checkout：回退到 pyproject.toml 的版本
         try:
             from pathlib import Path
-
-            try:
-                import tomllib  # Python 3.11+
-            except ModuleNotFoundError:  # pragma: no cover - 极老环境兜底
-                import tomli as tomllib  # type: ignore[no-redef]
+            import tomllib
 
             pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
             if pyproject.exists():

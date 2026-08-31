@@ -111,7 +111,8 @@ class PgVectorMemory(MemoryPort):
 
         from pgvector import Vector
 
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        dedup_content = content if identity is None else f"{identity}\0{content}"
+        digest = hashlib.sha256(dedup_content.encode("utf-8")).hexdigest()
         with self._connect() as conn:
             exists = conn.execute(
                 """SELECT 1 FROM agent_memories

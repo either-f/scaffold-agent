@@ -397,7 +397,6 @@ sys.path.insert(0, "src")
 
 import pytest
 
-from agent_kernel.adapters.tools.mcp import McpToolbox, StdioServerConfig
 from agent_kernel.types import ToolSpec
 
 
