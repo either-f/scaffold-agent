@@ -1,5 +1,5 @@
 {"version":2,"width":80,"height":24}
-[0.0,"o","可用技能: ['web-research']\n"]
+[0.0,"o","可用技能: ['ai-daily-news', 'github-trending', 'job-hunter', 'web-research']\n"]
 [0.1,"o","父 kernel 工具: ['worker_research']\n"]
 [0.2,"o","\n"]
 [0.30000000000000004,"o","\n"]
