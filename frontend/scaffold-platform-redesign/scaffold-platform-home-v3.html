@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Scaffold Platform · 首页</title>
+<style>
+:root{
+  --bg:#f7f9fb;--card:#fff;--text:#111827;--sub:#6f7b8d;--muted:#98a2b1;
+  --line:#e8edf2;--green:#14b88e;--green2:#0ca77f;--green-soft:#e7f8f2;
+  --blue:#2388ea;--purple:#8255e8;--orange:#ff7a12;--red:#ff5e57;
+  --shadow:0 5px 18px rgba(15,23,42,.045);--radius:13px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+body{min-width:1120px}
+svg{display:block}
+button{font:inherit}
+.topbar{height:62px;background:#fff;border-bottom:1px solid #eef1f4;display:flex;align-items:center;position:sticky;top:0;z-index:20}
+.top-inner{width:1594px;max-width:calc(100vw - 40px);margin:auto;display:flex;align-items:center;height:100%}
+.brand{display:flex;align-items:center;gap:10px;min-width:235px;font-weight:760;font-size:20px;letter-spacing:-.2px;position:relative}.brand:after{content:"";position:absolute;right:16px;width:1px;height:26px;background:#e8ecef}
+.brand-logo{width:30px;height:30px}
+.nav{display:flex;align-items:center;height:100%;gap:24px}
+.nav a{height:100%;display:flex;align-items:center;gap:8px;padding:0 2px;text-decoration:none;color:#242b36;font-size:15px;font-weight:540;position:relative;white-space:nowrap}
+.nav a.active{color:var(--green);font-weight:700}
+.nav a.active:after{content:"";position:absolute;bottom:0;left:1px;right:1px;height:3px;background:var(--green);border-radius:4px 4px 0 0}
+.nav-icon{width:18px;height:18px;color:currentColor}
+.header-spacer{flex:1}
+.search{width:383px;height:38px;border:1px solid #e1e6ec;border-radius:9px;background:#fafbfc;display:flex;align-items:center;padding:0 12px;gap:9px;color:#a0a9b5;font-size:13.5px;margin-right:20px}
+.search svg{width:18px;height:18px;stroke:#8390a0}
+.search .placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.search .shortcut{margin-left:auto;border:1px solid #e6e9ed;background:#f4f6f8;border-radius:5px;padding:1px 6px;color:#9ba5b2;font-size:11px}
+.top-icon{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;position:relative;color:#1f2937;margin-left:4px}
+.top-icon svg{width:20px;height:20px;stroke:currentColor}
+.notif{position:absolute;top:2px;right:2px;width:17px;height:17px;border-radius:50%;display:grid;place-items:center;background:#ff4d45;color:#fff;font-size:10px;border:2px solid #fff}
+.user{display:flex;align-items:center;gap:9px;margin-left:14px;font-size:14px;font-weight:620;white-space:nowrap}
+.avatar{width:34px;height:34px;border-radius:50%;overflow:hidden;border:1px solid #e7eaee;background:#edf3f6}
+.chev{width:14px;height:14px;stroke:#6e7886}
+
+.page{width:1322px;margin:22px auto 36px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;margin-bottom:18px}
+.stat{height:106px;background:#fff;border:1px solid #e9edf1;border-radius:13px;box-shadow:var(--shadow);display:flex;align-items:center;padding:0 20px}
+.stat-ico{width:54px;height:54px;border-radius:50%;display:grid;place-items:center;margin-right:18px;flex:0 0 auto}
+.stat-ico svg{width:27px;height:27px}
+.stat:nth-child(1) .stat-ico{background:#dff8ef;color:#13b287}.stat:nth-child(2) .stat-ico{background:#e8f3ff;color:#218be9}.stat:nth-child(3) .stat-ico{background:#efe7ff;color:#8255e8}.stat:nth-child(4) .stat-ico{background:#fff0df;color:#ff7a12}
+.stat-title{font-size:15px;font-weight:650;margin-bottom:4px}
+.stat-line{display:flex;align-items:baseline;gap:8px}
+.stat-num{font-size:23px;line-height:1.1;font-weight:760;letter-spacing:-.3px}
+.trend{font-size:12px;color:#12b98b;font-weight:650}.trend.down{color:#ff7b6d}.stat-sub{font-size:12px;color:#99a3b0;margin-top:4px}
+
+.grid{display:grid;grid-template-columns:944px 360px;gap:18px;align-items:start}
+.panel,.side-card{background:#fff;border:1px solid #e9edf1;border-radius:13px;box-shadow:var(--shadow);overflow:hidden}
+.tabs{height:54px;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 24px;gap:48px}
+.tab{height:54px;display:flex;align-items:center;position:relative;font-size:16px;color:#3d4654;font-weight:520;cursor:pointer}
+.tab.active{font-weight:760;color:#171d26}.tab.active:after{content:"";position:absolute;bottom:-1px;left:0;right:0;height:3px;background:var(--green);border-radius:3px 3px 0 0}
+.tab-tools{margin-left:auto;display:flex;align-items:center;gap:20px;color:#485566;font-size:13px}
+.tab-tools span{display:flex;align-items:center;gap:6px}.tab-tools svg{width:17px;height:17px;stroke:#647286}
+.feed{padding:0}
+.item{min-height:207px;padding:26px 23px 22px;border-bottom:1px solid var(--line);position:relative}
+.item.project{min-height:218px}.item.news{min-height:197px;border-bottom:none}
+.item-top{display:grid;grid-template-columns:56px minmax(0,1fr) 205px;gap:14px;align-items:start}
+.source-logo{width:52px;height:52px;border-radius:11px;display:grid;place-items:center;overflow:hidden}
+.source-logo.mi{background:#ff6b00;color:white}.source-logo.mi svg{width:38px;height:38px}
+.source-logo.git{background:#17191e}.source-logo.git svg{width:39px;height:39px}
+.source-logo.openai{background:#258af2}.source-logo.openai svg{width:37px;height:37px}
+.title-row{display:flex;align-items:center;gap:10px;margin-top:1px;min-width:0}
+.title{font-size:18px;font-weight:760;letter-spacing:-.1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge-soft{font-size:11px;font-weight:650;border-radius:6px;padding:3px 8px;background:#e7f8f2;color:#12ad84;white-space:nowrap}.badge-soft.blue{background:#e7f2ff;color:#308be5}.badge-soft.gray{background:#f0f2f5;color:#667384}
+.meta{font-size:13px;color:#8a95a4;margin-top:7px}
+.tags{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}.tag{font-size:12px;color:#657181;background:#f2f4f6;border-radius:6px;padding:4px 10px}
+.side-actions{min-width:0;text-align:right;color:#8993a1;font-size:12px}
+.side-icons{display:flex;justify-content:flex-end;gap:17px;margin-bottom:39px}.side-icons svg{width:19px;height:19px;stroke:#516072}
+.item-time{margin-bottom:16px}
+.actions{display:flex;justify-content:flex-end;gap:12px}.btn{height:39px;border-radius:9px;border:1px solid #d8dee6;background:white;color:#566273;padding:0 20px;min-width:103px}.btn.primary{background:linear-gradient(180deg,#14bf96,#09aa80);border-color:#0aad82;color:#fff;font-weight:700;box-shadow:0 4px 11px rgba(15,177,134,.18)}
+.desc{font-size:13px;line-height:1.55;color:#6f7a8a;margin:13px 0 12px}
+.reason-label{font-size:13px;font-weight:760;margin:0 0 5px}.reason{font-size:13px;line-height:1.55;color:#667283}
+.loaded{height:38px;margin:0 22px 18px;border-radius:7px;background:#f5f7f9;display:flex;align-items:center;justify-content:center;color:#8994a3;font-size:12px;gap:7px}
+.loaded svg{width:15px;height:15px;stroke:#8994a3}
+
+.sidebar{display:flex;flex-direction:column;gap:16px}
+.side-card{padding:19px 22px}
+.side-card.hot{height:230px}.side-card.todo{height:202px}.side-card.auto{height:220px}
+.side-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}.side-title{font-size:17px;font-weight:760}.more{font-size:12px;color:#98a2b0}
+.rank-list{display:flex;flex-direction:column;gap:13px}.rank{display:grid;grid-template-columns:20px 1fr auto;gap:8px;align-items:start;font-size:13px;line-height:1.35}.rank .no{font-weight:800;color:#ff5d57;font-size:15px}.rank:nth-child(2) .no{color:#ff7b2f}.rank:nth-child(3) .no{color:#f5a21b}.rank:nth-child(n+4) .no{color:#b7bec8}.heat{color:#98a1ae;font-size:11px;white-space:nowrap}.heat svg{display:inline;width:12px;height:12px;fill:#ff7f63;vertical-align:-2px;margin-right:3px}
+.todo-list{display:flex;flex-direction:column;gap:14px}.todo-row{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center}.todo-icon{width:23px;height:23px;border-radius:6px;display:grid;place-items:center;color:#217fe4}.todo-icon svg{width:16px;height:16px}.todo-icon.git{color:#111827}.todo-icon.ref{color:#5b6775}.todo-name{font-size:12.5px;color:#344050;margin-bottom:3px}.todo-sub{font-size:11px;color:#98a2b0}.todo-time{font-size:11px;color:#9aa4b1;white-space:nowrap}.red-dot{width:6px;height:6px;border-radius:50%;background:#ff4d45;margin-left:6px;display:inline-block}
+.auto-list{display:flex;flex-direction:column;gap:17px}.auto-row{display:grid;grid-template-columns:24px 1fr 38px;gap:8px;align-items:center}.auto-icon{width:22px;height:22px;color:#14b68c;display:grid;place-items:center}.auto-icon svg{width:18px;height:18px}.auto-name{font-size:13px;color:#344050;margin-bottom:3px}.auto-sub{font-size:11px;color:#98a2b0}.toggle{width:36px;height:20px;border-radius:10px;background:#12b88d;position:relative}.toggle:after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;right:2px;top:2px;box-shadow:0 1px 4px rgba(15,23,42,.2)}
+.fab{position:fixed;right:36px;bottom:30px;width:52px;height:52px;border-radius:50%;background:#d6f8ee;color:#0ba57e;display:grid;place-items:center;box-shadow:0 7px 20px rgba(15,177,134,.14)}.fab svg{width:25px;height:25px}
+
+/* make the reference proportions remain stable on wider screens */
+@media(max-width:1380px){.page{width:calc(100vw - 40px)}.grid{grid-template-columns:minmax(0,1fr) 340px}.top-inner{max-width:calc(100vw - 28px)}.search{width:310px}.nav{gap:18px}.brand{min-width:210px}}
+
+/* v3 polish: preserve v2 layout, only refine micro-interactions */
+.nav a,.tab,.btn,.top-icon,.side-card,.stat,.item{transition:all .16s ease}
+.nav a{cursor:pointer}
+.nav a:hover{color:var(--green)}
+.stat:hover,.side-card:hover{transform:translateY(-1px);box-shadow:0 8px 24px rgba(15,23,42,.065)}
+.item:hover{background:#fcfdfd}
+.btn:hover{border-color:#bfc9d4;background:#fafcfd}
+.btn.primary:hover{background:linear-gradient(180deg,#13b98f,#079b75);border-color:#079b75}
+.tab:hover{color:var(--green)}
+.search{transition:border-color .16s ease,box-shadow .16s ease}
+.search:hover{border-color:#cfd8df}
+.search:focus-within{border-color:#7fd8c0;box-shadow:0 0 0 3px rgba(20,184,142,.08)}
+
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+<defs>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.8 10.8 12 4l8.2 6.8v8.5a1.7 1.7 0 0 1-1.7 1.7h-13a1.7 1.7 0 0 1-1.7-1.7z" fill="currentColor"/><path d="M9.2 21v-6.8h5.6V21" fill="#fff" opacity=".95"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 19c.6-4 2.6-6 5.5-6s4.9 2 5.5 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="17.3" cy="9.2" r="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15.4 14.1c2.8-.3 4.7 1.3 5.2 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="4.8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 12 18.5 7.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></symbol>
+  <symbol id="i-news" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="7" width="16" height="12" rx="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 3v4M8.5 12h.01M15.5 12h.01M9 16h6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="3" r="1.4" fill="currentColor"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 5.5v6c0 1.8 3.4 3.2 7.5 3.2s7.5-1.4 7.5-3.2v-6M4.5 11.5v6c0 1.8 3.4 3.2 7.5 3.2s7.5-1.4 7.5-3.2v-6" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.7" cy="10.7" r="6.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="m15.3 15.3 4.4 4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6.5 9.5c0-3.5 2.1-5.5 5.5-5.5s5.5 2 5.5 5.5v4.1l1.8 2.6H4.7l1.8-2.6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9.6 19c.5 1.1 1.3 1.7 2.4 1.7s1.9-.6 2.4-1.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9.8 9.2c.2-1.6 1.3-2.6 3-2.6 1.8 0 3 1 3 2.6 0 1.4-.8 2.1-2.1 2.9-1.1.7-1.5 1.2-1.5 2.2M12.2 17.6h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="15" cy="6" r="1.7" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="12" r="1.7" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="17" cy="18" r="1.7" fill="none" stroke="currentColor" stroke-width="1.5"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19 8a8 8 0 1 0 1 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M19 4v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M7 4.5h10v15L12 16l-5 3.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-briefcase" viewBox="0 0 24 24"><rect x="3.5" y="7" width="17" height="12.5" rx="2.5" fill="currentColor"/><rect x="8.4" y="4.1" width="7.2" height="4" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 11.2h17" stroke="#fff" stroke-width="1.5" opacity=".9"/><rect x="10.1" y="10.5" width="3.8" height="2.2" rx=".7" fill="#fff"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.2c0-1.3 1-2.2 2.3-2.2h4l1.8 2H18c1.4 0 2.5 1.1 2.5 2.5v7.8c0 1.4-1.1 2.5-2.5 2.5H6c-1.4 0-2.5-1.1-2.5-2.5z" fill="currentColor"/></symbol>
+  <symbol id="i-fire" viewBox="0 0 24 24"><path d="M13.8 2.8c.6 3.1-1.6 4.3-2.7 6.4-.8-1.1-1.1-2.5-.6-4.1C6.6 7.5 4.8 10 4.8 13.4A7.2 7.2 0 0 0 12 20.7a7.2 7.2 0 0 0 7.2-7.3c0-4.1-2.4-7.4-5.4-10.6Z" fill="currentColor"/><path d="M12 11.1c1.9 2.1 2.4 3.7 1.6 5.1-.5.9-1.1 1.4-1.8 1.7-1.5-.5-2.5-1.6-2.5-3.1 0-1.4.8-2.7 2.7-3.7Z" fill="#fff" opacity=".82"/></symbol>
+  <symbol id="i-task" viewBox="0 0 24 24"><rect x="5" y="4.2" width="14" height="16" rx="2.2" fill="currentColor"/><path d="M8.5 9.2h7M8.5 13h7M8.5 16.8h4" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.8 4.2 4.2L19 7.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 7v5l3.2 2" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M9.8 14.2 14.2 9.8M7.2 16.8l-1.1 1.1a3.2 3.2 0 0 1-4.5-4.5l4.1-4.1a3.2 3.2 0 0 1 4.5 0M16.8 7.2l1.1-1.1a3.2 3.2 0 1 1 4.5 4.5l-4.1 4.1a3.2 3.2 0 0 1-4.5 0" transform="translate(-.5 -.5)" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+</defs>
+</svg>
+<header class="topbar">
+  <div class="top-inner">
+    <div class="brand">
+      <svg class="brand-logo" viewBox="0 0 32 32" aria-label="Scaffold logo">
+        <defs><linearGradient id="sg" x1="5" y1="3" x2="27" y2="29" gradientUnits="userSpaceOnUse"><stop stop-color="#22c99d"/><stop offset="1" stop-color="#08a77e"/></linearGradient></defs>
+        <path d="M15.9 2.5 26 8.3v6.1l-4.8 2.8-5.3-3.1 4.7-2.7-4.7-2.7-5.2 3v6.1L5.9 15V8.3l10-5.8Z" fill="url(#sg)"/>
+        <path d="m16.1 29.5-10.2-5.8v-6.1l4.8-2.8 5.4 3.1-4.8 2.7 4.8 2.7 5.2-3v-6.1l4.8 2.8v6.7l-10 5.8Z" fill="url(#sg)"/>
+      </svg>
+      <span>Scaffold Platform</span>
+    </div>
+    <nav class="nav">
+      <a class="active" href="#home"><svg class="nav-icon"><use href="#i-home"/></svg>首页</a>
+      <a href="#recruitment"><svg class="nav-icon"><use href="#i-users"/></svg>招聘</a>
+      <a href="#projects"><svg class="nav-icon"><use href="#i-radar"/></svg>项目雷达</a>
+      <a href="#ai-daily"><svg class="nav-icon"><use href="#i-news"/></svg>AI日报</a>
+      <a href="#automation"><svg class="nav-icon"><use href="#i-bot"/></svg>自动化</a>
+      <a href="#sources"><svg class="nav-icon"><use href="#i-db"/></svg>数据源</a>
+    </nav>
+    <div class="header-spacer"></div>
+    <div class="search"><svg><use href="#i-search"/></svg><span class="placeholder">搜索岗位 / 公司 / 项目 / 技术 / 资讯</span><span class="shortcut">⌘K</span></div>
+    <div class="top-icon"><svg><use href="#i-bell"/></svg><span class="notif">6</span></div>
+    <div class="top-icon"><svg><use href="#i-help"/></svg></div>
+    <div class="user">
+      <div class="avatar"><svg viewBox="0 0 36 36"><defs><linearGradient id="avbg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#c7dfe8"/><stop offset="1" stop-color="#eff5f8"/></linearGradient></defs><rect width="36" height="36" fill="url(#avbg)"/><circle cx="18" cy="14" r="7" fill="#f1c7aa"/><path d="M10 13c1-7 4-9 8-9 5 0 8 3 8 9-3-3-6-5-10-5-2 2-4 3-6 5Z" fill="#182532"/><path d="M7 36c1-9 5-13 11-13 7 0 11 4 12 13Z" fill="#273b4a"/><circle cx="16" cy="14" r=".8" fill="#2f3640"/><circle cx="21" cy="14" r=".8" fill="#2f3640"/><path d="M16 18c1.3.8 2.7.8 4 0" fill="none" stroke="#b76f5b" stroke-width="1" stroke-linecap="round"/></svg></div>
+      <span>张子轩</span><svg class="chev" viewBox="0 0 24 24"><path d="m7 9 5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+</header>
+<main class="page">
+  <section class="stats">
+    <div class="stat"><div class="stat-ico"><svg><use href="#i-briefcase"/></svg></div><div><div class="stat-title">高匹配岗位</div><div class="stat-line"><span class="stat-num">23</span><span class="trend">↑ 12%</span></div><div class="stat-sub">较昨日新增 3 个</div></div></div>
+    <div class="stat"><div class="stat-ico"><svg><use href="#i-folder"/></svg></div><div><div class="stat-title">今日推荐项目</div><div class="stat-line"><span class="stat-num">8</span><span class="trend">↑ 33%</span></div><div class="stat-sub">较昨日新增 2 个</div></div></div>
+    <div class="stat"><div class="stat-ico"><svg><use href="#i-fire"/></svg></div><div><div class="stat-title">AI热点</div><div class="stat-line"><span class="stat-num">12</span><span class="trend">↑ 8%</span></div><div class="stat-sub">今日新增 4 条</div></div></div>
+    <div class="stat"><div class="stat-ico"><svg><use href="#i-task"/></svg></div><div><div class="stat-title">待处理事项</div><div class="stat-line"><span class="stat-num">7</span><span class="trend down">↓ 2%</span></div><div class="stat-sub">较昨日减少 1 个</div></div></div>
+  </section>
+  <section class="grid">
+    <div class="panel">
+      <div class="tabs"><div class="tab active">推荐</div><div class="tab">招聘</div><div class="tab">项目</div><div class="tab">AI动态</div><div class="tab">内推</div><div class="tab-tools"><span><svg><use href="#i-filter"/></svg>筛选</span><span><svg><use href="#i-refresh"/></svg></span></div></div>
+      <div class="feed">
+        <article class="item">
+          <div class="item-top">
+            <div class="source-logo mi"><svg viewBox="0 0 64 64"><rect x="7" y="12" width="50" height="40" rx="9" fill="#fff"/><path d="M17 24h17c8 0 12 4 12 12v10h-8V35c0-3-1-4-4-4h-9v15h-8z" fill="#ff6b00"/><rect x="48" y="24" width="7" height="22" rx="2" fill="#ff6b00"/></svg></div>
+            <div><div class="title-row"><div class="title">大模型算法工程师（NLP方向）</div><span class="badge-soft">高匹配</span></div><div class="meta">小米 · 北京 · 30-50K · 3-5年</div><div class="tags"><span class="tag">NLP</span><span class="tag">大模型</span><span class="tag">PyTorch</span><span class="tag">分布式训练</span></div></div>
+            <div class="side-actions"><div class="side-icons"><svg><use href="#i-bookmark"/></svg><svg style="fill:#516072"><use href="#i-more"/></svg></div><div class="item-time">发布于 2 小时前</div></div>
+          </div>
+          <div class="reason-label">推荐理由</div><div class="reason">你的大模型项目经验与该岗位要求高度匹配；在 NLP、PyTorch、分布式训练方面具备优势。</div>
+          <div class="actions"><button class="btn">稍后处理</button><button class="btn primary">查看详情</button></div>
+        </article>
+        <article class="item project">
+          <div class="item-top">
+            <div class="source-logo git"><svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="23" fill="#fff"/><path d="M32 15c-10 0-18 7.5-18 17 0 7.5 5 13.8 12 16 .8.2 1-.3 1-.7v-3c-5 .9-6-2-6-2-.8-2-2-2.5-2-2.5-1.6-1 .1-1 .1-1 1.8.1 2.7 1.8 2.7 1.8 1.6 2.6 4.3 1.9 5.3 1.4.2-1.1.6-1.9 1.2-2.4-4-.5-8.3-1.9-8.3-8.4 0-1.9.7-3.4 1.8-4.6-.2-.5-.8-2.3.2-4.7 0 0 1.5-.5 4.9 1.8a17.7 17.7 0 0 1 9 0c3.4-2.3 4.9-1.8 4.9-1.8 1 2.4.4 4.2.2 4.7 1.1 1.2 1.8 2.7 1.8 4.6 0 6.5-4.3 7.9-8.3 8.4.7.5 1.3 1.6 1.3 3.2v4.7c0 .4.2.9 1 .7 7-2.2 12-8.5 12-16 0-9.5-8-17-18-17Z" fill="#17191e"/></svg></div>
+            <div><div class="title-row"><div class="title">InternLM/agent-lab</div><span class="badge-soft gray">GitHub Trending #3</span></div><div class="meta">开源项目 · 8.7k ⭐ · Python</div><div class="tags"><span class="tag">大模型</span><span class="tag">智能体</span><span class="tag">工具调用</span><span class="tag">RAG</span></div></div>
+            <div class="side-actions"><div class="side-icons"><svg><use href="#i-bookmark"/></svg><svg style="fill:#516072"><use href="#i-more"/></svg></div><div class="item-time">更新于 4 小时前</div></div>
+          </div>
+          <div class="desc">一个用于构建、评估和部署大语言模型智能体的开源框架，支持多种插件与环境。</div><div class="reason-label">推荐理由</div><div class="reason">项目热度高，社区活跃；与你关注的 AI Agent 方向强相关，值得关注。</div>
+          <div class="actions"><button class="btn">加入收藏</button><button class="btn primary">查看项目</button></div>
+        </article>
+        <article class="item news">
+          <div class="item-top">
+            <div class="source-logo openai"><svg viewBox="0 0 64 64"><g fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round"><path d="M32 15c6-5 15-.4 15 7.3 7 .6 10.5 9.5 5.2 14.8 3.2 7.2-4.4 14.7-11.3 11.2-4.3 6.4-14.8 4.7-16.1-2.8-7.7.3-11.6-8.2-6.4-13.7-4.1-6.8 2.3-14.3 9.7-12.2C28.7 17.8 30 16.2 32 15Z"/><path d="m26 19 12 7v14l-12 7M20 32l12-7 12 7M26 46V32l12-7M38 39 26 32l12-7"/></g></svg></div>
+            <div><div class="title-row"><div class="title">OpenAI 发布 GPT-4o mini：更强、更快、更便宜</div><span class="badge-soft blue">AI资讯</span></div><div class="meta">机器之心 · 1 小时前</div></div>
+            <div class="side-actions"><div class="side-icons"><svg><use href="#i-bookmark"/></svg><svg style="fill:#516072"><use href="#i-more"/></svg></div></div>
+          </div>
+          <div class="desc">OpenAI 正式发布 GPT-4o mini，在多项基准测试中超越 GPT-3.5 Turbo，价格降低 60%，已向开发者开放。</div><div class="reason-label">推荐理由</div><div class="reason">模型能力提升显著，成本下降，有望推动更多 AI 应用落地。</div>
+          <div class="actions"><button class="btn">稍后阅读</button><button class="btn primary">阅读全文</button></div>
+        </article>
+        <div class="loaded"><svg><use href="#i-check"/></svg>已加载全部</div>
+      </div>
+    </div>
+    <aside class="sidebar">
+      <section class="side-card hot"><div class="side-head"><div class="side-title">今日热榜</div><div class="more">更多 ›</div></div><div class="rank-list">
+        <div class="rank"><span class="no">1</span><span>AGI 何时到来？深度长文复盘</span><span class="heat"><svg viewBox="0 0 24 24"><use href="#i-fire"/></svg>12.3k</span></div>
+        <div class="rank"><span class="no">2</span><span>字节跳动 Seed 团队发布图像模型...</span><span class="heat"><svg viewBox="0 0 24 24"><use href="#i-fire"/></svg>9.8k</span></div>
+        <div class="rank"><span class="no">3</span><span>Claude 3.5 系列模型全面开放</span><span class="heat"><svg viewBox="0 0 24 24"><use href="#i-fire"/></svg>7.6k</span></div>
+        <div class="rank"><span class="no">4</span><span>国内大模型产品全景对比（6月版）</span><span class="heat"><svg viewBox="0 0 24 24"><use href="#i-fire"/></svg>6.1k</span></div>
+        <div class="rank"><span class="no">5</span><span>Midjourney V6 正式版发布</span><span class="heat"><svg viewBox="0 0 24 24"><use href="#i-fire"/></svg>5.4k</span></div>
+      </div></section>
+      <section class="side-card todo"><div class="side-head"><div class="side-title">待处理</div><div class="more">查看全部（7）</div></div><div class="todo-list">
+        <div class="todo-row"><div class="todo-icon"><svg><use href="#i-task"/></svg></div><div><div class="todo-name">Boss 直聘 · 新消息</div><div class="todo-sub">字节跳动 · 2轮技术面试邀请</div></div><div class="todo-time">10 分钟前<span class="red-dot"></span></div></div>
+        <div class="todo-row"><div class="todo-icon git"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="currentColor"/></svg></div><div><div class="todo-name">GitHub · 3 个项目更新</div><div class="todo-sub">3 个项目有新动态</div></div><div class="todo-time">1 小时前<span class="red-dot"></span></div></div>
+        <div class="todo-row"><div class="todo-icon ref"><svg><use href="#i-link"/></svg></div><div><div class="todo-name">内推 · 2 个新机会</div><div class="todo-sub">来自校友的内推机会</div></div><div class="todo-time">2 小时前</div></div>
+      </div></section>
+      <section class="side-card auto"><div class="side-head"><div class="side-title">自动化状态</div><div class="more">管理 ›</div></div><div class="auto-list">
+        <div class="auto-row"><div class="auto-icon"><svg><use href="#i-refresh"/></svg></div><div><div class="auto-name">每日岗位订阅</div><div class="auto-sub">已运行 · 08:00 自动执行</div></div><div class="toggle"></div></div>
+        <div class="auto-row"><div class="auto-icon"><svg><use href="#i-radar"/></svg></div><div><div class="auto-name">项目雷达</div><div class="auto-sub">已运行 · 每小时执行</div></div><div class="toggle"></div></div>
+        <div class="auto-row"><div class="auto-icon"><svg><use href="#i-clock"/></svg></div><div><div class="auto-name">AI日报摘要</div><div class="auto-sub">已运行 · 每日 09:00</div></div><div class="toggle"></div></div>
+      </div></section>
+    </aside>
+  </section>
+</main>
+<div class="fab"><svg viewBox="0 0 24 24"><path d="m12 2 1.5 5 5 1.5-5 1.5-1.5 5-1.5-5-5-1.5 5-1.5zM18.5 14l.8 2.7 2.7.8-2.7.8-.8 2.7-.8-2.7-2.7-.8 2.7-.8z" fill="currentColor"/></svg></div>
+</body>
+</html>
