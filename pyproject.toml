@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [dependency-groups]
-dev = ["pytest>=8,<9"]
+dev = ["pytest>=8,<9", "httpx>=0.27,<1"]
 
 [project.optional-dependencies]
 model = ["litellm>=1.93,<2"]
@@ -23,6 +23,8 @@ mem0 = ["mem0ai>=2.0,<3", "chromadb>=0.5,<2"]
 daytona = ["daytona>=0.203,<1"]
 agentscope = ["agentscope>=2.0,<3"]
 mlflow = ["mlflow>=3.0,<4"]
+scrapers = ["requests>=2,<3", "beautifulsoup4>=4,<5"]
+api = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "apscheduler>=3.10,<4", "pyjwt>=2.8,<3", "bcrypt>=4.0,<5"]
 
 [build-system]
 requires = ["setuptools>=68"]
