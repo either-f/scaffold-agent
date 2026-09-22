@@ -25,7 +25,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from agent_kernel.adapters.memory.graph import GraphMemory
 from agent_kernel.checkpoint import JsonCheckpointStore
 from agent_kernel.ports import MemoryPort, ModelPort
-from agent_kernel.types import Message
+from agent_kernel.types import MemoryHit, Message
 
 GRAPH_NAMESPACE = "default"
 REL_HAS_FACT = "HAS_FACT"
@@ -180,13 +180,13 @@ class DictMemory(MemoryPort):
     def __init__(self) -> None:
         self.items: list[tuple[str, str, str]] = []
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         if (run_id, role, content) in self.items:
             return
         self.items.append((run_id, role, content))
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        return [content for _, _, content in self.items[:k]]
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
+        return [MemoryHit(content, source="") for _, _, content in self.items[:k]]
 
 
 def run_offline() -> dict:

@@ -12,6 +12,7 @@ import time
 
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 
 class Neo4jGraphMemory(MemoryPort):
@@ -43,44 +44,66 @@ class Neo4jGraphMemory(MemoryPort):
                 "CREATE INDEX edge_dedup IF NOT EXISTS "
                 "FOR ()-[r:REL]-() ON (r.dedup_key)"
             )
+            session.run(
+                "CREATE INDEX fact_identity IF NOT EXISTS "
+                "FOR (f:Fact) ON (f.identity)"
+            )
 
     # ------------------------------------------------------ MemoryPort contract
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         # ponytail: 无 TTL/importance 属性，跟 memory/graph.py（SQLite 对照实现）不对齐；
         # 没有可连的真实 Neo4j 验证 Cypher 改动，先不加，真要用时给 Fact 节点加同名属性+WHERE 过滤。
         content = content.strip()
         if role not in ("user", "assistant") or not content:
             return
+        dedup_identity = "" if identity is None else identity
         digest = hashlib.sha256(
-            f"{self.namespace}|{role}|{content}".encode("utf-8")
+            f"{self.namespace}|{dedup_identity}|{role}|{content}".encode("utf-8")
         ).hexdigest()
         with self.driver.session() as session:
             session.run(
                 "MERGE (f:Fact {dedup_key: $dedup_key}) "
                 "ON CREATE SET f.namespace = $namespace, f.run_id = $run_id, "
-                "f.role = $role, f.content = $content, f.ts = $ts",
+                "f.role = $role, f.content = $content, f.ts = $ts, f.identity = $identity",
                 dedup_key=digest,
                 namespace=self.namespace,
                 run_id=run_id,
                 role=role,
                 content=content,
                 ts=time.time(),
+                identity=identity,
             )
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         query = query.strip()
         if not query or k <= 0:
             return []
         words = sorted(query.split(), key=len, reverse=True)
         with self.driver.session() as session:
-            result = session.run(
-                "MATCH (f:Fact) WHERE f.namespace = $namespace AND f.content CONTAINS $word "
-                "RETURN f.content AS content ORDER BY f.ts DESC LIMIT $k",
-                namespace=self.namespace,
-                word=words[0],
-                k=k,
-            )
-            return [record["content"] for record in result]
+            if identity is None:
+                result = session.run(
+                    "MATCH (f:Fact) WHERE f.namespace = $namespace AND f.content CONTAINS $word "
+                    "RETURN f.content AS content, f.run_id AS run_id "
+                    "ORDER BY f.ts DESC LIMIT $k",
+                    namespace=self.namespace,
+                    word=words[0],
+                    k=k,
+                )
+            else:
+                result = session.run(
+                    "MATCH (f:Fact) WHERE f.namespace = $namespace AND f.content CONTAINS $word "
+                    "AND (f.identity = $identity OR f.identity IS NULL) "
+                    "RETURN f.content AS content, f.run_id AS run_id "
+                    "ORDER BY f.ts DESC LIMIT $k",
+                    namespace=self.namespace,
+                    word=words[0],
+                    identity=identity,
+                    k=k,
+                )
+            return [
+                MemoryHit(record["content"], score=None, source="graph", run_id=record["run_id"])
+                for record in result
+            ]
 
     # --------------------------------------------------------- graph edge API
     def add_edge(self, subject: str, relation: str, object: str) -> None:

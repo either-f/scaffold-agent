@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 NeighborsFn = Callable[[str], list[tuple[str, str, str, str]]]
 EdgesFn = Callable[[], list[tuple[str, str, str]]]
@@ -86,22 +87,22 @@ class HybridGraphRAG(MemoryPort):
         self.hops = hops
         self.per_leg_k = per_leg_k
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         # 只转发给 vector + keyword 两路原始内容索引；graph 的实体/关系写入是离线
         # ingestion 的职责（见模块 docstring），跟 CompositeMemory.add() 只落 episodic
         # 不重复写 semantic 是同一个理由。
-        self.vector.add(run_id, role, content)
-        self.keyword.add(run_id, role, content)
+        self.vector.add(run_id, role, content, identity=identity)
+        self.keyword.add(run_id, role, content, identity=identity)
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        vector_hits = self.vector.search(query, k=self.per_leg_k)
-        keyword_hits = self.keyword.search(query, k=self.per_leg_k)
-        graph_hits = self._graph_search(query, self.per_leg_k)
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
+        vector_hits = self.vector.search(query, k=self.per_leg_k, identity=identity)
+        keyword_hits = self.keyword.search(query, k=self.per_leg_k, identity=identity)
+        graph_hits = self._graph_search(query, self.per_leg_k, identity)
         fused = reciprocal_rank_fusion([vector_hits, keyword_hits, graph_hits], k=self.rrf_k)
-        return [content for content, _ in fused[:k]]
+        return [MemoryHit(content, score=score, source="hybrid") for content, score in fused[:k]]
 
-    def _graph_search(self, query: str, k: int) -> list[str]:
-        fact_hits = self.graph.search(query, k=k)
+    def _graph_search(self, query: str, k: int, identity: str | None = None) -> list[str]:
+        fact_hits = self.graph.search(query, k=k, identity=identity)
         seeds = self._seed_entities(query)
         hop_hits = multi_hop_search(self.neighbors_fn, seeds, hops=self.hops, k=k) if seeds else []
         merged = list(dict.fromkeys([*fact_hits, *hop_hits]))

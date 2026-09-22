@@ -12,9 +12,12 @@ import pytest
 from agent_kernel.adapters.model.fake import FakeScriptedModel
 from agent_kernel.adapters.tools.local import LocalToolbox, default_toolbox
 from agent_kernel.checkpoint import JsonCheckpointStore
-from agent_kernel.kernel import AgentKernel
+from agent_kernel.events import EventBus
+from agent_kernel.kernel import AgentKernel, RunFailedError
 from agent_kernel.planners.react import ReactPlanner
-from agent_kernel.types import RunState
+from agent_kernel.ports import PlannerPort
+from agent_kernel.schema import ToolArgumentValidationError
+from agent_kernel.types import ModelOutput, RunState
 
 SCRIPT = [
     '{"thought": "t", "tool": "calc", "args": {"expression": "(3+4)*7"}}',
@@ -170,6 +173,209 @@ def test_multi_turn_resets_step_but_keeps_run_id():
     assert state2.turn == 2 and state2.step == 1  # step 在新一轮清零，run_id 不变
 
 
+class NativeToolCallModel:
+    """模拟原生 tool calling：先返回带 id 的 tool_calls，再返回最终答案。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def complete(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            return ModelOutput(
+                text="",
+                tool_calls=[
+                    {"name": "calc", "args": {"expression": "1+1"}, "id": "call_native_1"}
+                ],
+            )
+        return ModelOutput(text='{"thought": "t", "final": "结果是 2"}')
+
+
+def test_native_tool_call_records_tool_calls_and_tool_call_id():
+    """native 路径：内核记录的 assistant 消息带 tool_calls，tool 消息带匹配的 tool_call_id。"""
+    tools = LocalToolbox()
+    tools.register("calc", "calc", lambda expression: str(eval(expression)))
+    kernel = AgentKernel(
+        model=NativeToolCallModel(),
+        tools=tools,
+        planner=ReactPlanner(),
+    )
+    state = kernel.run("算 1+1")
+    assert state.status == "done"
+
+    # 找到发起 tool call 的 assistant 消息
+    asst_with_tc = [m for m in state.messages if m.role == "assistant" and m.tool_calls]
+    assert len(asst_with_tc) == 1
+    assert asst_with_tc[0].tool_calls[0]["id"] == "call_native_1"
+    assert asst_with_tc[0].tool_calls[0]["name"] == "calc"
+
+    # 紧随其后的 tool 消息带同一 tool_call_id
+    tool_msgs = [m for m in state.messages if m.role == "tool"]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0].tool_call_id == "call_native_1"
+    assert tool_msgs[0].content == "2"
+
+
+def test_native_tool_call_pending_tool_carries_call_id_for_resume():
+    """native 路径下 paused 的 pending_tool 必须携带 call_id，resume 后仍能正确回灌。"""
+    tools = LocalToolbox()
+    tools.register("calc", "calc", lambda expression: str(eval(expression)))
+    with tempfile.TemporaryDirectory() as tmp:
+        store = JsonCheckpointStore(tmp)
+        crashing_kernel = AgentKernel(
+            model=NativeToolCallModel(),
+            tools=tools,
+            planner=ReactPlanner(),
+            checkpoints=store,
+            approval=_crash_approval,
+        )
+        with pytest.raises(SystemExit):
+            crashing_kernel.run("算 1+1", state=RunState(run_id="native-1"))
+
+        loaded = store.load("native-1")
+        assert loaded is not None and loaded.status == "paused"
+        assert loaded.pending_tool is not None
+        assert loaded.pending_tool.call_id == "call_native_1"
+
+        # resume 时 pending_tool 的 call_id 仍在，且记录的 assistant 消息带 tool_calls
+        resuming_kernel = AgentKernel(
+            model=FakeScriptedModel(['{"thought": "t", "final": "结果是 2"}']),
+            tools=tools,
+            planner=ReactPlanner(),
+            checkpoints=store,
+            approval=lambda call: True,
+        )
+        resumed = resuming_kernel.resume(loaded)
+        assert resumed.status == "done"
+        asst_with_tc = [m for m in resumed.messages if m.role == "assistant" and m.tool_calls]
+        assert len(asst_with_tc) == 1
+        assert asst_with_tc[0].tool_calls[0]["id"] == "call_native_1"
+        tool_msgs = [m for m in resumed.messages if m.role == "tool"]
+        assert tool_msgs[0].tool_call_id == "call_native_1"
+def test_tool_argument_validation_missing_required_field():
+    """SPEC-96: ToolCall 的 args 缺 required 字段时，在 effect 提案/执行前抛
+    ToolArgumentValidationError，run 落 failed 终态并 re-raise。"""
+    tools = LocalToolbox()
+    tools.register(
+        "greet", "打招呼", lambda name: f"hi {name}",
+        parameters={
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    )
+    kernel = AgentKernel(
+        model=FakeScriptedModel(['{"thought": "t", "tool": "greet", "args": {}}']),
+        tools=tools,
+        planner=ReactPlanner(),
+    )
+    with pytest.raises(ToolArgumentValidationError) as exc_info:
+        kernel.run("打个招呼但漏掉 name")
+    assert "name" in exc_info.value.detail
+    # 状态机已落 failed；靠事件流断言 reason 字段
+    events = []
+
+    bus = EventBus()
+    bus.subscribe("run.failed", events.append)
+    kernel2 = AgentKernel(
+        model=FakeScriptedModel(['{"thought": "t", "tool": "greet", "args": {}}']),
+        tools=tools,
+        planner=ReactPlanner(),
+        bus=bus,
+    )
+    with pytest.raises(ToolArgumentValidationError):
+        kernel2.run("再触发一次校验失败")
+    failed_events = [e for e in events if e.type == "run.failed"]
+    assert len(failed_events) == 1
+    assert failed_events[0].payload["reason"] == "tool_argument_validation"
+
+
+def test_tool_argument_validation_wrong_type():
+    """SPEC-96: 字段类型与 JSON Schema 声明不符时同样挡住。"""
+    tools = LocalToolbox()
+    tools.register(
+        "addone", "加一", lambda n: str(int(n) + 1),
+        parameters={
+            "type": "object",
+            "properties": {"n": {"type": "integer"}},
+            "required": ["n"],
+        },
+    )
+    kernel = AgentKernel(
+        # 传字符串给声明为 integer 的字段
+        model=FakeScriptedModel(['{"thought": "t", "tool": "addone", "args": {"n": "abc"}}']),
+        tools=tools,
+        planner=ReactPlanner(),
+    )
+    with pytest.raises(ToolArgumentValidationError):
+        kernel.run("传错类型")
+
+
+def test_planner_exception_becomes_failed_run_with_checkpoint():
+    """SPEC-96: planner/model 抛异常时 run 落 failed + checkpoint，异常仍向上抛。"""
+
+    class _CrashingPlanner(PlannerPort):
+        def step(self, state, model, tools, memory):
+            raise RuntimeError("model API exploded")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = JsonCheckpointStore(tmp)
+        events: list = []
+        bus = EventBus()
+        bus.subscribe("run.failed", events.append)
+        kernel = AgentKernel(
+            model=FakeScriptedModel([]),
+            tools=default_toolbox(),
+            planner=_CrashingPlanner(),
+            checkpoints=store,
+            bus=bus,
+        )
+        state = RunState(run_id="crash-1")
+        with pytest.raises(RunFailedError) as exc_info:
+            kernel.run("触发 planner 崩溃", state=state)
+        assert exc_info.value.reason == "planner_exception"
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        # checkpoint 已落盘且状态为 failed
+        loaded = store.load("crash-1")
+        assert loaded is not None
+        assert loaded.status == "failed"
+        assert "RuntimeError" in (loaded.answer or "")
+        # run.failed 事件携带 reason 区分
+        failed_events = [e for e in events if e.type == "run.failed"]
+        assert len(failed_events) == 1
+        assert failed_events[0].payload["reason"] == "planner_exception"
+
+
+def test_tool_error_marks_is_error_and_visible_in_tool_after():
+    """SPEC-96: 工具内部抛异常 -> ToolResult.is_error=True，tool.after 事件携带。"""
+    tools = LocalToolbox()
+
+    def boom():
+        raise RuntimeError("kaboom")
+
+    tools.register("boom", "boom", boom)
+    events: list = []
+    bus = EventBus()
+    bus.subscribe("tool.after", events.append)
+    kernel = AgentKernel(
+        model=FakeScriptedModel(
+            [
+                '{"thought": "t", "tool": "boom", "args": {}}',
+                '{"thought": "t", "final": "已处理错误"}',
+            ]
+        ),
+        tools=tools,
+        planner=ReactPlanner(),
+        bus=bus,
+    )
+    state = kernel.run("触发工具异常")
+    assert state.status == "done"
+    after_events = [e for e in events if e.type == "tool.after"]
+    assert len(after_events) == 1
+    assert after_events[0].payload["is_error"] is True
+    assert "kaboom" in after_events[0].payload["result"]
+
+
 if __name__ == "__main__":
     test_kernel_loop_and_checkpoint()
     test_hitl_veto()
@@ -179,4 +385,10 @@ if __name__ == "__main__":
     test_resume_paused_without_approval_callback_rejected()
     test_max_steps_exhausted()
     test_multi_turn_resets_step_but_keeps_run_id()
+    test_native_tool_call_records_tool_calls_and_tool_call_id()
+    test_native_tool_call_pending_tool_carries_call_id_for_resume()
+    test_tool_argument_validation_missing_required_field()
+    test_tool_argument_validation_wrong_type()
+    test_planner_exception_becomes_failed_run_with_checkpoint()
+    test_tool_error_marks_is_error_and_visible_in_tool_after()
     print("OK: kernel 状态机测试全部通过")

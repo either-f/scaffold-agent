@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 
 class Mem0Memory(MemoryPort):
@@ -69,20 +70,29 @@ class Mem0Memory(MemoryPort):
             }
         )
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         content = content.strip()
         if role not in {"user", "assistant"} or not content:
             return
         self._memory.add(
             [{"role": role, "content": content}],
-            user_id=self.namespace,
+            user_id=identity or self.namespace,
             run_id=run_id,
         )
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         query = query.strip()
         if not query or k <= 0:
             return []
-        result: Any = self._memory.search(query, filters={"user_id": self.namespace}, top_k=k)
+        result: Any = self._memory.search(query, filters={"user_id": identity or self.namespace}, top_k=k)
         items = result.get("results", []) if isinstance(result, dict) else result
-        return [item["memory"] for item in items if item.get("memory")]
+        return [
+            MemoryHit(
+                item["memory"],
+                score=float(item["score"]) if item.get("score") is not None else None,
+                source="semantic",
+                run_id=item.get("run_id"),
+            )
+            for item in items
+            if item.get("memory")
+        ]

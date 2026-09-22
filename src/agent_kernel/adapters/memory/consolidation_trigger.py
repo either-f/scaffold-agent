@@ -20,6 +20,7 @@ import threading
 from typing import Callable
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 OnTrigger = Callable[[str], None]
 
@@ -46,8 +47,8 @@ class ConsolidationTriggerMemory(MemoryPort):
         self._timer_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
-    def add(self, run_id: str, role: str, content: str) -> None:
-        self.episodic.add(run_id, role, content)
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
+        self.episodic.add(run_id, role, content, identity=identity)
         with self._lock:
             count = self._counts.get(run_id, 0) + 1
             self._counts[run_id] = count
@@ -62,8 +63,8 @@ class ConsolidationTriggerMemory(MemoryPort):
         if hard or soft:
             self.on_trigger(run_id)
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        return self.episodic.search(query, k=k)
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
+        return self.episodic.search(query, k=k, identity=identity)
 
     # --------------------------------------------------------------- 定时触发
     def start_timer(self) -> None:

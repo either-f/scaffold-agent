@@ -14,7 +14,16 @@ from __future__ import annotations
 import json
 
 from ..ports import MemoryPort, ModelPort, PlannerPort, ToolPort
-from ..types import Action, FinalAnswer, Message, ModelOutput, RunState, ToolCall
+from ..types import (
+    Action,
+    FinalAnswer,
+    Message,
+    ModelOutput,
+    RunState,
+    ToolCall,
+    ToolCallBatch,
+    ToolSpec,
+)
 from .context import ContextBuilder
 
 SYSTEM_TMPL = """你是一个会使用工具的助手。可用工具：
@@ -50,6 +59,7 @@ class ReactPlanner(PlannerPort):
         context_builder: ContextBuilder | None = None,
         preferences: MemoryPort | None = None,
         preferences_k: int = 5,
+        tool_budget: int | None = None,
     ) -> None:
         self.context_builder = context_builder or ContextBuilder()
         # 偏好记忆：独立 namespace 的 MemoryPort，每轮固定 query 检索、无条件注入，
@@ -57,6 +67,12 @@ class ReactPlanner(PlannerPort):
         # ponytail: 写入（自动提取偏好陈述）留给离线巩固脚本做，这里只做读取注入。
         self.preferences = preferences
         self.preferences_k = preferences_k
+        if tool_budget is not None and tool_budget < 0:
+            raise ValueError("tool_budget 不能为负数")
+        # tool_budget 设置后，step() 只注入 search_tools(query, k=budget) 检索到的
+        # 工具描述（加上最近成功调用过的工具），而非全量 list_tools()。
+        # None = 默认行为：全量注入，不改变任何现有调用方的 prompt。
+        self.tool_budget = tool_budget
 
     def step(
         self,
@@ -65,23 +81,37 @@ class ReactPlanner(PlannerPort):
         tools: ToolPort,
         memory: MemoryPort | None,
     ) -> Action:
-        tool_specs = tools.list_tools()
-        tool_desc = "\n".join(
-            f"- {t.name}: {t.description}; 参数 JSON Schema: "
-            f"{json.dumps(t.parameters, ensure_ascii=False)}"
-            for t in tool_specs
-        ) or "(无)"
+        if self.tool_budget is None:
+            tool_specs = tools.list_tools()
+        else:
+            query = next((m.content for m in reversed(state.messages) if m.role == "user"), "")
+            tool_specs = tools.search_tools(query, k=self.tool_budget)
+            tool_specs = self._with_last_used_tool(tool_specs, state, tools)
+        if getattr(model, "supports_native_tools", False):
+            # 完整 schema 已经由 ModelPort 的原生 tools 通道发送，prompt 只保留短清单。
+            tool_desc = "\n".join(f"- {t.name}: {t.description}" for t in tool_specs) or "(无)"
+        else:
+            tool_desc = "\n".join(
+                f"- {t.name}: {t.description}; 参数 JSON Schema: "
+                f"{json.dumps(t.parameters, ensure_ascii=False)}"
+                for t in tool_specs
+            ) or "(无)"
 
         blocks: list[str] = []
         if self.preferences:
             prefs = self.preferences.search(PREFERENCE_QUERY, k=self.preferences_k)
             if prefs:
+                # MemoryHit 是 str 子类，直接用其字符串值（=content）拼接
                 blocks.append("已知偏好与约束（每轮都生效）：\n" + "\n".join(f"- {p}" for p in prefs))
         if memory and state.messages:
             query = next((m.content for m in reversed(state.messages) if m.role == "user"), "")
             current_context = {m.content for m in state.messages}
             hits = (
-                [hit for hit in memory.search(query, k=8) if hit not in current_context][:3]
+                [
+                    hit
+                    for hit in memory.search(query, k=8)
+                    if str(hit) not in current_context
+                ][:3]
                 if query
                 else []
             )
@@ -96,6 +126,27 @@ class ReactPlanner(PlannerPort):
         action, _ = self._resolve(model, prompt, tool_specs, output)
         return action
 
+    @staticmethod
+    def _with_last_used_tool(
+        tool_specs: list[ToolSpec], state: RunState, tools: ToolPort
+    ) -> list[ToolSpec]:
+        """把本次 run 中最近一次调用的工具补回检索结果集--
+        多步工具序列不会因为 budget 收窄而丢失刚用过的工具。"""
+        last_used: str | None = None
+        for msg in reversed(state.messages):
+            if (
+                msg.role == "tool"
+                and msg.name
+                and not msg.content.startswith(("[tool-error]", "[HITL]"))
+            ):
+                last_used = msg.name
+                break
+        if last_used and not any(t.name == last_used for t in tool_specs):
+            spec = next((t for t in tools.list_tools() if t.name == last_used), None)
+            if spec is not None:
+                return [*tool_specs, spec]
+        return tool_specs
+
     def _resolve(
         self,
         model: ModelPort,
@@ -106,20 +157,31 @@ class ReactPlanner(PlannerPort):
         """把一次 model.complete() 的输出解析成 Action；原生 tool_calls 优先，
         否则走文本 JSON 解析，失败重试一次，仍失败抛 ActionParseError。
         返回 (action, 最终采用的 output)，供调用方（如 Plan-Execute）取 plan 文本用。
+
+        SPEC-88 Req3：模型并行发起多个 tool_calls 时，返回 ToolCallBatch 而非只取第一个。
+        单个 tool_call 时仍返回 ToolCall（保持 isinstance(action, ToolCall) 分支不变）。
         """
         if output.tool_calls:
-            # ponytail: 内核动作协议一步一动作，模型并行发起多个 tool_calls 时只取第一个；
-            # 真有并行工具调用需求时再把 Action 扩成 list。
-            call = output.tool_calls[0]
-            return ToolCall(name=call["name"], args=call.get("args", {})), output
+            calls = [
+                ToolCall(name=c["name"], args=c.get("args", {}), call_id=c.get("id"))
+                for c in output.tool_calls
+            ]
+            if len(calls) == 1:
+                return calls[0], output
+            return ToolCallBatch(calls=calls), output
         try:
             return self._parse(output.text), output
         except ActionParseError:
             retry_prompt = [*prompt, Message("assistant", output.text), Message("user", RETRY_HINT)]
             retry_output = model.complete(retry_prompt, tool_specs)
             if retry_output.tool_calls:
-                call = retry_output.tool_calls[0]
-                return ToolCall(name=call["name"], args=call.get("args", {})), retry_output
+                calls = [
+                    ToolCall(name=c["name"], args=c.get("args", {}), call_id=c.get("id"))
+                    for c in retry_output.tool_calls
+                ]
+                if len(calls) == 1:
+                    return calls[0], retry_output
+                return ToolCallBatch(calls=calls), retry_output
             return self._parse(retry_output.text), retry_output  # 第二次仍失败：直接抛出
 
     @staticmethod
@@ -136,4 +198,8 @@ class ReactPlanner(PlannerPort):
             return ToolCall(name=obj["tool"], args=obj.get("args", {}), thought=thought)
         if "final" not in obj:
             raise ActionParseError(text)
-        return FinalAnswer(content=str(obj["final"]), thought=thought)
+        final = str(obj["final"])
+        if not final.strip():
+            # 系统提示明确要求 "final 不得为空"；空/纯空白 final 不允许静默完成 run。
+            raise ActionParseError(text)
+        return FinalAnswer(content=final, thought=thought)

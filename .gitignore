@@ -2,6 +2,7 @@
 .cache/
 .tools/
 runs/
+.agent-kernel/
 __pycache__/
 *.pyc
 *.egg-info/
@@ -11,3 +12,6 @@ __pycache__/
 # 浏览器验收产物（日志、截图）
 .playwright-cli/
 output/
+build/
+dist/
+.coverage

@@ -6,7 +6,8 @@
 worker 可以是 `AgentKernel`（同步执行 `worker.run(task)`，取 `RunState.status`/
 `.answer`），也可以是任何实现 `Worker` 协议（`run(task) -> str`，失败直接抛异常）的
 对象——比如 `AgentScopeWorker`（见 `adapters/tools/agentscope_worker.py`）。两条路径
-在 `call()` 里分支处理，`AgentKernel` 走原语义零改动，新协议只是加了一扇门。
+在 `call()` 里分支处理。`AgentKernel` 路径还会传递委派深度，超过上限时在
+`run()` 前失败；通用 Worker 保持原有协议，不要求暴露内核字段。
 """
 from __future__ import annotations
 
@@ -28,6 +29,23 @@ class Worker(Protocol):
 
 
 WorkerLike = Union[AgentKernel, Worker]
+
+
+class DelegationDepthExceededError(RuntimeError):
+    """委派链深度超过 max_delegation_depth（SPEC-88 Req4）。
+
+    worker A 委派给 worker B、B 又委派回 A 时，depth 逐级递增；
+    超过配置上限时在 worker.run() 之前抛出，防止无限递归。
+    """
+
+    def __init__(self, depth: int, max_depth: int | None, worker_name: str) -> None:
+        self.depth = depth
+        self.max_depth = max_depth
+        self.worker_name = worker_name
+        super().__init__(
+            f"委派深度 {depth} 超过上限 {max_depth}（worker '{worker_name}'），"
+            "已阻止递归委派"
+        )
 
 
 class WorkerDelegationPort(ToolPort):
@@ -77,7 +95,16 @@ class WorkerDelegationPort(ToolPort):
         worker = self._workers[worker_name]
 
         if isinstance(worker, AgentKernel):
-            state = worker.run(task)
+            previous_depth = worker.delegation_depth
+            next_depth = previous_depth + 1
+            max_depth = worker.max_delegation_depth
+            if max_depth is not None and next_depth > max_depth:
+                raise DelegationDepthExceededError(next_depth, max_depth, worker_name)
+            worker.delegation_depth = next_depth
+            try:
+                state = worker.run(task)
+            finally:
+                worker.delegation_depth = previous_depth
             if state.status != "done":
                 raise RuntimeError(
                     f"worker '{worker_name}' 执行失败，状态: {state.status}，答案: {state.answer}"

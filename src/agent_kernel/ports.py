@@ -8,11 +8,17 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from .types import Action, Effect, Message, ModelOutput, RunState, ToolResult, ToolSpec
+from .types import Action, Effect, MemoryHit, Message, ModelOutput, RunState, ToolResult, ToolSpec
 
 
 class ModelPort(ABC):
-    """模型端口。换模型/厂商 = 换 adapter（如 LiteLLM）。"""
+    """模型端口。换模型/厂商 = 换 adapter（如 LiteLLM）。
+
+    ``supports_native_tools`` 告诉 planner 是否已通过 provider 的原生 ``tools=``
+    通道发送完整 schema。文本模型沿用默认值 False。
+    """
+
+    supports_native_tools: bool = False
 
     @abstractmethod
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> ModelOutput: ...
@@ -24,18 +30,33 @@ class ToolPort(ABC):
     @abstractmethod
     def list_tools(self) -> list[ToolSpec]: ...
 
+    def search_tools(self, query: str, k: int | None = None) -> list[ToolSpec]:
+        """按 query 检索相关工具，返回不超过 k 个（k=None 时返回全部）。
+
+        默认实现不做任何过滤，直接返回 list_tools() 的前 k 个——
+        每个 adapter 无需 override 即可获得正确（虽然未过滤）的行为。
+        能做更好匹配的 adapter（如 McpToolbox 做子串匹配）可自行覆盖。
+        """
+        tools = self.list_tools()
+        return tools[:k] if k is not None else tools
+
     @abstractmethod
     def call(self, name: str, args: dict) -> ToolResult: ...
 
 
 class MemoryPort(ABC):
-    """记忆端口。接口形态对齐 Mem0（add/search），便于日后换图谱/分层记忆。"""
+    """记忆端口。接口形态对齐 Mem0（add/search），便于日后换图谱/分层记忆。
+
+    identity 参数（SPEC-90）：可选的调用方身份/命名空间作用域键，用于多用户/多租户
+    部署隔离记忆。默认 None 保留既有单租户行为。适配器应将其作为构造期 namespace
+    之上的附加过滤条件，使单个适配器实例可安全服务多个 identity。
+    """
 
     @abstractmethod
-    def add(self, run_id: str, role: str, content: str) -> None: ...
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None: ...
 
     @abstractmethod
-    def search(self, query: str, k: int = 5) -> list[str]: ...
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]: ...
 
 
 class PlannerPort(ABC):
@@ -96,6 +117,9 @@ class EffectLedger(ABC):
 
     @abstractmethod
     def mark_failed(self, effect_id: str, result_ref: str) -> None: ...
+
+    @abstractmethod
+    def mark_rejected(self, effect_id: str) -> None: ...
 
     @abstractmethod
     def get(self, effect_id: str) -> Effect | None: ...

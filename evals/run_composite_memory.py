@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from agent_kernel.adapters.memory.composite import CompositeMemory
 from agent_kernel.ports import MemoryPort
+from agent_kernel.types import MemoryHit
 
 
 class DictMemory(MemoryPort):
@@ -20,11 +21,11 @@ class DictMemory(MemoryPort):
         self.added: list[tuple[str, str, str]] = []
         self.canned = canned or []
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         self.added.append((run_id, role, content))
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        return self.canned[:k]
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
+        return [MemoryHit(c, source="") for c in self.canned[:k]]
 
 
 def run_composite() -> dict:

@@ -76,13 +76,22 @@ def _run_scenario(run_id: str, script: list[str], approval, max_steps: int = 10)
             and reduced.pending_effect_id == checkpointed.pending_effect_id
             and reduced.step == checkpointed.step
         )
+        # SPEC-94: 检查事件身份与排序字段完整性
+        event_ids_ok = all(e.event_id for e in events)
+        seqs = [e.sequence for e in events]
+        sequences_monotonic = seqs == sorted(seqs) and all(s > 0 for s in seqs)
+        # SPEC-94: 检查 reducer 覆盖的新字段（失败场景有 last_error，正常场景无）
+        last_error_matches = reduced.last_error == checkpointed.last_error
         return {
             "run_id": run_id,
             "event_count": len(events),
             "event_types": [e.type for e in events],
             "final_status": final_state.status,
             "fields_match": fields_match,
-            "ok": fields_match,
+            "event_ids_ok": event_ids_ok,
+            "sequences_monotonic": sequences_monotonic,
+            "last_error_matches": last_error_matches,
+            "ok": fields_match and event_ids_ok and sequences_monotonic and last_error_matches,
         }
 
 

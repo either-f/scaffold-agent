@@ -17,10 +17,10 @@ class SpyMemory(MemoryPort):
         self.added: list[tuple[str, str, str]] = []
         self.search_calls: list[tuple[str, int]] = []
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         self.added.append((run_id, role, content))
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[str]:
         self.search_calls.append((query, k))
         return [f"hit{self.tag}-for-{query}"]
 

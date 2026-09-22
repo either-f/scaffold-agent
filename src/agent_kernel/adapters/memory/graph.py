@@ -3,6 +3,10 @@
 标准 MemoryPort.add/search 存查纯文本事实。
 额外提供 add_edge / search_edges / get_neighbors 图谱方法。
 忽略 tool-role 写入（对齐 PgVectorMemory），namespace 隔离，内容去重。
+
+SPEC-90：search 返回 MemoryHit（score=None，LIKE 无真实相似度；source="graph"）；
+identity 参数作为 "default" namespace 之上的附加过滤（新增可空 identity 列，
+兼容既有未分级行）。
 """
 from __future__ import annotations
 
@@ -11,6 +15,7 @@ import sqlite3
 import time
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 
 class GraphMemory(MemoryPort):
@@ -31,6 +36,12 @@ class GraphMemory(MemoryPort):
             "edge_hash TEXT NOT NULL, ts REAL, "
             "UNIQUE(namespace, subject, relation, object))"
         )
+        # SPEC-90: 增量加 identity 列（可空）+ 索引
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(graph_facts)").fetchall()}
+        if "identity" not in cols:
+            self.conn.execute("ALTER TABLE graph_facts ADD COLUMN identity TEXT")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_facts_identity ON graph_facts(identity)")
+            self.conn.commit()
 
     # ------------------------------------------------------ MemoryPort contract
     def add(
@@ -38,34 +49,45 @@ class GraphMemory(MemoryPort):
         run_id: str,
         role: str,
         content: str,
+        identity: str | None = None,
         importance: float = 1.0,
         ttl_seconds: float | None = None,
     ) -> None:
         content = content.strip()
         if role not in ("user", "assistant") or not content:
             return
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        dedup_content = content if identity is None else f"{identity}\0{content}"
+        digest = hashlib.sha256(dedup_content.encode("utf-8")).hexdigest()
         expires_at = time.time() + ttl_seconds if ttl_seconds is not None else None
         self.conn.execute(
             "INSERT OR IGNORE INTO graph_facts"
-            "(namespace, run_id, role, content, content_hash, ts, importance, expires_at) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            ("default", run_id, role, content, digest, time.time(), importance, expires_at),
+            "(namespace, run_id, role, content, content_hash, ts, identity, importance, expires_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            ("default", run_id, role, content, digest, time.time(), identity, importance, expires_at),
         )
         self.conn.commit()
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         query = query.strip()
         if not query or k <= 0:
             return []
         words = sorted(query.split(), key=len, reverse=True)
-        rows = self.conn.execute(
-            "SELECT content FROM graph_facts WHERE namespace=? AND content LIKE ? "
-            "AND (expires_at IS NULL OR expires_at > ?) "
-            "ORDER BY importance DESC, ts DESC LIMIT ?",
-            ("default", f"%{words[0]}%", time.time(), k),
-        ).fetchall()
-        return [r[0] for r in rows]
+        if identity is None:
+            rows = self.conn.execute(
+                "SELECT content, run_id FROM graph_facts WHERE namespace=? AND content LIKE ? "
+                "AND (expires_at IS NULL OR expires_at > ?) "
+                "ORDER BY importance DESC, ts DESC LIMIT ?",
+                ("default", f"%{words[0]}%", time.time(), k),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT content, run_id FROM graph_facts "
+                "WHERE namespace=? AND content LIKE ? AND (identity = ? OR identity IS NULL) "
+                "AND (expires_at IS NULL OR expires_at > ?) "
+                "ORDER BY importance DESC, ts DESC LIMIT ?",
+                ("default", f"%{words[0]}%", identity, time.time(), k),
+            ).fetchall()
+        return [MemoryHit(content, score=None, source="graph", run_id=run_id) for content, run_id in rows]
 
     def prune_expired(self) -> int:
         """TTL 生命周期管理：删除已过期事实，返回删除行数。边（graph_edges）不设 TTL——

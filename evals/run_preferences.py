@@ -15,18 +15,18 @@ from agent_kernel.adapters.tools.local import LocalToolbox
 from agent_kernel.kernel import AgentKernel
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.ports import MemoryPort, ModelPort
-from agent_kernel.types import ModelOutput, ToolSpec
+from agent_kernel.types import MemoryHit, ModelOutput, ToolSpec
 
 
 class FixedMemory(MemoryPort):
     def __init__(self, hits: list[str]) -> None:
         self.hits = hits
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         pass
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        return self.hits[:k]
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
+        return [MemoryHit(h, source="") for h in self.hits[:k]]
 
 
 class CapturingModel(ModelPort):

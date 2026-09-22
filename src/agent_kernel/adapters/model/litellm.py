@@ -13,6 +13,8 @@ from .streaming import StreamChunk, StreamingModelPort, ToolCallDelta
 
 
 class LiteLLMModel(ModelPort):
+    supports_native_tools = True
+
     def __init__(self, model: str, **kwargs) -> None:
         try:
             import litellm  # noqa: F401
@@ -32,7 +34,7 @@ class LiteLLMModel(ModelPort):
 
         resp = litellm.completion(
             model=self.model,
-            messages=[{"role": m.role if m.role != "tool" else "user", "content": m.content} for m in messages],
+            messages=[_to_litellm_message(m) for m in messages],
             **kwargs,
         )
         choice = resp.choices[0].message
@@ -62,6 +64,28 @@ class LiteLLMModel(ModelPort):
         )
 
 
+def _to_litellm_message(m: Message) -> dict:
+    if m.role == "assistant" and m.tool_calls:
+        return {
+            "role": "assistant",
+            "content": m.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": tc.get("name"),
+                        "arguments": json.dumps(tc.get("args", {}), ensure_ascii=False),
+                    },
+                }
+                for tc in m.tool_calls
+            ],
+        }
+    if m.role == "tool" and m.tool_call_id is not None:
+        return {"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content}
+    return {"role": m.role if m.role != "tool" else "user", "content": m.content}
+
+
 def litellm_streaming_model(model: str, **kwargs) -> StreamingModelPort:
     """流式版 LiteLLMModel：litellm stream=True 逐 chunk 拉取，包成 StreamingModelPort。
     支持流式原生 tool_calls——OpenAI 兼容格式里 delta.tool_calls 按 index 分组，
@@ -84,7 +108,7 @@ def litellm_streaming_model(model: str, **kwargs) -> StreamingModelPort:
 
         resp = litellm.completion(
             model=model,
-            messages=[{"role": m.role if m.role != "tool" else "user", "content": m.content} for m in messages],
+            messages=[_to_litellm_message(m) for m in messages],
             stream=True,
             **call_kwargs,
         )
@@ -110,8 +134,6 @@ def _parse_tool_call_delta(tc) -> ToolCallDelta:
         function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
     ) if function else None
     return ToolCallDelta(index=index if index is not None else 0, id=call_id, name=name, arguments_fragment=arguments or "")
-
-
 def _to_litellm_tool(spec: ToolSpec) -> dict:
     return {
         "type": "function",
@@ -125,10 +147,45 @@ def _to_litellm_tool(spec: ToolSpec) -> dict:
 
 def _parse_tool_call(tc) -> dict:
     function = tc.get("function") if isinstance(tc, dict) else tc.function
+    # provider 返回的 tool_call id：原生回路必须原样带回，否则下一轮无法匹配 tool_call_id
+    call_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
     name = function.get("name") if isinstance(function, dict) else function.name
     raw_args = function.get("arguments") if isinstance(function, dict) else function.arguments
+    args = _decode_tool_arguments(name, raw_args)
+    return {"name": name, "args": args, "id": call_id}
+
+
+def _decode_tool_arguments(name: str, raw_args) -> dict:
+    """严格解析原生 tool call 的 arguments。
+
+    - 空/缺省：视为合法的零参调用 `{}`（确有零参工具）。
+    - 非 JSON 或解析结果非 dict：抛 NativeToolCallArgumentError，禁止静默降级为零参调用
+      （否则会与真正零参工具碰撞，且掩盖模型错误）。
+    """
+    if not raw_args:
+        return {}
+    if not isinstance(raw_args, str):
+        raw_args = str(raw_args)
     try:
-        args = json.loads(raw_args) if raw_args else {}
-    except json.JSONDecodeError:
-        args = {}
-    return {"name": name, "args": args}
+        parsed = json.loads(raw_args)
+    except json.JSONDecodeError as exc:
+        raise NativeToolCallArgumentError(name, raw_args) from exc
+    if not isinstance(parsed, dict):
+        raise NativeToolCallArgumentError(name, raw_args)
+    return parsed
+
+
+class NativeToolCallArgumentError(ValueError):
+    """模型原生 tool call 的 arguments 不是合法 JSON 对象。
+
+    不再静默降级为 `{}`（旧实现会把畸形参数变成零参调用，与 SPEC-80 的工具身份校验
+    和合法零参工具碰撞）。调用方据此向模型回灌错误或上抛，而不是执行一个没参数的工具。
+    """
+
+    def __init__(self, tool_name: str, raw_args: str) -> None:
+        self.tool_name = tool_name
+        self.raw_args = raw_args
+        snippet = raw_args if len(raw_args) <= 200 else raw_args[:200] + "…"
+        super().__init__(
+            f"原生 tool call（工具 {tool_name!r}）的 arguments 不是合法 JSON 对象: {snippet!r}"
+        )

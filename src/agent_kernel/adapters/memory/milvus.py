@@ -16,9 +16,11 @@ Milvus Lite 嵌入模式，`"http://host:19530"` 走真实 Milvus server，同�
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 
 class MilvusMemory(MemoryPort):
@@ -76,12 +78,13 @@ class MilvusMemory(MemoryPort):
             raise ValueError(f"embedding 维度错误：期望 {self.dimensions}")
         return [float(value) for value in vector]
 
-    def add(self, run_id: str, role: str, content: str) -> None:
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
         content = content.strip()
         if role not in {"user", "assistant"} or not content:
             return
 
-        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        dedup_content = content if identity is None else f"{identity}\0{content}"
+        digest = hashlib.sha256(dedup_content.encode("utf-8")).hexdigest()
         exists = self.client.query(
             collection_name=self.namespace,
             filter=f'content_hash == "{digest}"',
@@ -99,21 +102,36 @@ class MilvusMemory(MemoryPort):
                     "role": role,
                     "content": content,
                     "content_hash": digest,
+                    "identity": identity,
                 }
             ],
         )
 
-    def search(self, query: str, k: int = 5) -> list[str]:
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
         query = query.strip()
         if not query or k <= 0:
             return []
 
         embedding = self._embed(query)
+        kwargs = {
+            "collection_name": self.namespace,
+            "data": [embedding],
+            "limit": k,
+            "output_fields": ["content", "run_id"],
+        }
+        if identity is not None:
+            escaped = json.dumps(identity)
+            kwargs["filter"] = f"identity == {escaped} or identity is null"
         results = self.client.search(
-            collection_name=self.namespace,
-            data=[embedding],
-            limit=k,
-            output_fields=["content"],
+            **kwargs,
         )
         hits = results[0] if results else []
-        return [hit["entity"]["content"] for hit in hits]
+        return [
+            MemoryHit(
+                hit["entity"]["content"],
+                score=float(hit.get("distance")) if hit.get("distance") is not None else None,
+                source="semantic",
+                run_id=hit["entity"].get("run_id"),
+            )
+            for hit in hits
+        ]

@@ -17,16 +17,27 @@ from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from ..events import EventBus, Handler
+from ..kernel import current_run_id
 from ..ports import ModelPort
 from ..types import Event, Message, ModelOutput, ToolSpec
 
 
 class ObservedModel(ModelPort):
-    """包装任意 ModelPort，在每次 complete 后发布 model.complete 事件。"""
+    """包装任意 ModelPort，在每次 complete 后发布 model.complete 事件。
+
+    SPEC-85: model.complete payload 现在携带 run_id（从 kernel.current_run_id
+    ContextVar 读取），使 CostLedger / OTel 在多 run 共享同一 EventBus 时也能
+    正确按 run 归因。ContextVar 由 AgentKernel.run()/resume() 在 run 生命期内
+    设置；未在 kernel 上下文内调用时 run_id 为 None，行为与旧版一致。
+    """
 
     def __init__(self, model: ModelPort, bus: EventBus) -> None:
         self.model = model
         self.bus = bus
+
+    @property
+    def supports_native_tools(self) -> bool:
+        return self.model.supports_native_tools
 
     def complete(self, messages: list[Message], tools: list[ToolSpec]) -> ModelOutput:
         started = time.perf_counter()
@@ -35,16 +46,15 @@ class ObservedModel(ModelPort):
         usage = output.usage or {}
         prompt_tokens = int(usage.get("prompt_tokens", 0))
         completion_tokens = int(usage.get("completion_tokens", 0))
-        self.bus.publish(
-            Event(
-                "model.complete",
-                {
-                    "duration_ms": duration_ms,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                },
-            )
-        )
+        run_id = current_run_id.get()
+        payload: dict[str, Any] = {
+            "duration_ms": duration_ms,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+        }
+        if run_id is not None:
+            payload["run_id"] = run_id
+        self.bus.publish(Event("model.complete", payload))
         return output
 
 
@@ -75,12 +85,12 @@ class CostLedger:
     """SQLite 成本台账：订阅 model.complete / run.start，按 run 聚合 token 与费用。
 
     价格单位为「美元 / 百万 token」。run_id 关联规则：
-    - 最近一次 run.start 的 run_id 视为当前活跃 run。
-    - model.complete 事件若自带 run_id 则用之，否则落到当前活跃 run。
+    - model.complete 事件优先用 payload 自带的 run_id（SPEC-85 起 ObservedModel
+      经 current_run_id ContextVar 注入，并发安全）。
+    - 缺失时回退到 _active_run_id（最近一次 run.start 的 run_id）——仅作向后兼容
+      兜底，单 run 顺序场景下足够；并发 run 下仍可能错配，此时应确保 ObservedModel
+      被用于发布 model.complete（默认路径）。
     - 无 run_id 且无活跃 run 的事件会被忽略。
-
-    ponytail: 单活跃 run 关联是刻意简化；多并发 run 会互相覆盖，
-    届时需要事件总线统一携带 run_id 或引入显式 trace 上下文。
     """
 
     def __init__(
@@ -127,6 +137,8 @@ class CostLedger:
 
     def _record_model_complete(self, event: Event) -> None:
         payload = event.payload
+        # SPEC-85: payload.run_id 优先（ObservedModel 经 ContextVar 注入，并发安全）；
+        # _active_run_id 仅作向后兼容兜底。
         run_id = payload.get("run_id") or self._active_run_id
         if not run_id:
             return
@@ -190,7 +202,11 @@ class CostLedger:
 
 @runtime_checkable
 class _OtelTracer(Protocol):
-    def start_span(self, name: str, attributes: dict[str, Any] | None = None) -> Any: ...
+    """OTel tracer 最小契约：start_as_current_span 返回的 span 需支持上下文管理
+    （__enter__/__exit__）以建立父子 context 栈。真实 opentelemetry-sdk 的
+    Tracer 满足此契约。"""
+
+    def start_as_current_span(self, name: str, attributes: dict[str, Any] | None = None) -> Any: ...
 
 
 _OTEL_PRIMITIVE_TYPES = (bool, str, bytes, int, float)
@@ -218,10 +234,27 @@ def _otel_attributes(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 class OtelExporter:
-    """把事件转成 OpenTelemetry span。tracer 可注入，便于离线测试。"""
+    """把事件转成 OpenTelemetry span，并建立 Run → Step → Model/Tool 的父子 trace 树。
+
+    SPEC-85: 旧实现每个事件 start_span 后立即 end()，8 个 span 全是孤立平级。
+    现在用 OTel 的 context 传播建立真实父子关系：
+    - run.start / run.resume 开启 run span（根），持续到 run.end / run.failed。
+    - step.start 开启 step span（run 的子），持续到下一个 step.start 或 run 结束。
+    - model.complete / tool.* 作为当前 step（或 run，若无 step）的子 span，即时起止。
+
+    父子关系靠 tracer.start_as_current_span 的 context 栈自然建立：EventBus.publish
+    同步顺序派发，handler 在调用线程内嵌套 enter/exit span，OTel SDK 自动把
+    parent.span_id 指向当前 current span。验证见 evals/run_observability_real.py。
+    """
+
+    _RUN_BEGIN_TYPES = {"run.start", "run.resume"}
+    _RUN_END_TYPES = {"run.end", "run.failed"}
+    _STEP_BEGIN_TYPE = "step.start"
 
     def __init__(self, tracer: _OtelTracer) -> None:
         self.tracer = tracer
+        self._run_span: Any = None
+        self._step_span: Any = None
 
     @classmethod
     def from_endpoint(cls, endpoint: str | None = None, service_name: str = "agent-kernel") -> "OtelExporter":
@@ -249,15 +282,73 @@ class OtelExporter:
     def handler(self) -> Handler:
         def _handle(event: Event) -> None:
             try:
-                span = self.tracer.start_span(event.type, attributes=_otel_attributes(event.payload))
-                end = getattr(span, "end", None)
-                if callable(end):
-                    end()
+                self._dispatch(event)
             except Exception:
                 # 观测失败绝不影响 run
                 pass
 
         return _handle
+
+    def _dispatch(self, event: Event) -> None:
+        etype = event.type
+        attrs = _otel_attributes(event.payload)
+
+        if etype in self._RUN_BEGIN_TYPES:
+            self._close_step_span()
+            self._close_run_span()
+            self._run_span = self.tracer.start_as_current_span(etype, attributes=attrs)
+            enter = getattr(self._run_span, "__enter__", None)
+            if callable(enter):
+                enter()
+            return
+
+        if etype in self._RUN_END_TYPES:
+            self._close_step_span()
+            self._close_run_span()
+            # run.end / run.failed 作为已关闭 run span 的平级收尾 span 不再需要；
+            # 它们的信息（status/answer）已通过 attrs 记录在 run span 上。这里仍
+            # 发一个独立叶子 span 保留事件可观测性，parent 指向已结束的 run（OTel
+            # 允许 parent 已结束）。为简化：直接发即时 span。
+            self._emit_leaf(etype, attrs)
+            return
+
+        if etype == self._STEP_BEGIN_TYPE:
+            self._close_step_span()
+            self._step_span = self.tracer.start_as_current_span(etype, attributes=attrs)
+            enter = getattr(self._step_span, "__enter__", None)
+            if callable(enter):
+                enter()
+            return
+
+        # model.complete / tool.* / 其它：作为当前 step（或 run）的子 span，即时起止
+        self._emit_leaf(etype, attrs)
+
+    def _emit_leaf(self, name: str, attrs: dict[str, Any]) -> None:
+        span = self.tracer.start_as_current_span(name, attributes=attrs)
+        enter = getattr(span, "__enter__", None)
+        exit_ = getattr(span, "__exit__", None)
+        if callable(enter) and callable(exit_):
+            enter()
+            exit_(None, None, None)
+        else:
+            # 测试 tracer 可能只暴露 start_span 语义
+            end = getattr(span, "end", None)
+            if callable(end):
+                end()
+
+    def _close_step_span(self) -> None:
+        if self._step_span is not None:
+            exit_ = getattr(self._step_span, "__exit__", None)
+            if callable(exit_):
+                exit_(None, None, None)
+            self._step_span = None
+
+    def _close_run_span(self) -> None:
+        if self._run_span is not None:
+            exit_ = getattr(self._run_span, "__exit__", None)
+            if callable(exit_):
+                exit_(None, None, None)
+            self._run_span = None
 
 
 @runtime_checkable

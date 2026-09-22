@@ -9,14 +9,22 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
+import json
+
 import pytest
 
 from agent_kernel.adapters.effects import SqliteEffectLedger
 from agent_kernel.checkpoint import JsonCheckpointStore
-from agent_kernel.kernel import AgentKernel, EffectArgumentMismatchError, EffectUnresolvedError
+from agent_kernel.kernel import (
+    AgentKernel,
+    ApprovalRequiredError,
+    EffectArgumentMismatchError,
+    EffectUnresolvedError,
+)
 from agent_kernel.ports import ModelPort, ToolPort
 from agent_kernel.planners.react import ReactPlanner
 from agent_kernel.types import (
+    ArtifactRef,
     Message,
     ModelOutput,
     RetryPolicy,
@@ -24,6 +32,7 @@ from agent_kernel.types import (
     ToolEffectPolicy,
     ToolResult,
     ToolSpec,
+    hash_arguments,
 )
 
 
@@ -238,10 +247,358 @@ def test_succeeded_effect_replays_without_reexecuting():
         ledger2.close()
 
 
+# --------------------------------------------------------------------------- #
+# SPEC-80 新增：fork 隔离 / tool_name+run_id 校验 / requires_approval fail-closed /
+# rejected 终态 / rowcount 校验 / 状态机 / 回放保留 artifacts
+# --------------------------------------------------------------------------- #
+from agent_kernel.adapters.effects import EffectNotFoundError, IllegalEffectTransitionError
+from agent_kernel.fork import fork
+
+
+class TwoNoArgTool(ToolPort):
+    """两个零参工具：now 和 ping。hash_arguments({}) 相同，用于证明
+    光靠 arguments_hash 拦不住零参工具间的 effect_id 碰撞。"""
+
+    def __init__(self):
+        self.calls = {"now": 0, "ping": 0}
+
+    def list_tools(self):
+        return [
+            ToolSpec("now", "当前时间", {}),
+            ToolSpec("ping", "探活", {}),
+        ]
+
+    def call(self, name, args):
+        self.calls[name] += 1
+        return ToolResult(content=f"{name}-ok")
+
+
+def test_fork_branches_execute_independently():
+    """SPEC-80 验收点1：同一 paused checkpoint 的两个 fork（批准 vs 拒绝），
+    各自独立执行工具调用，不互相串结果。"""
+
+    def crash_approval(_call):
+        raise SystemExit("crash")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ckpt = str(Path(tmp) / "runs")
+        ledger_path = str(Path(tmp) / "effects.db")
+        store = JsonCheckpointStore(ckpt)
+        counter: list[int] = []
+
+        # 第一阶段：跑到工具提案，模拟在审批期间崩溃（pending_tool 已落盘）。
+        src_ledger = SqliteEffectLedger(ledger_path)
+        kernel1 = AgentKernel(
+            model=ScriptedModel([TOOL_CALL_SCRIPT]),
+            tools=CountingTool(counter),
+            planner=ReactPlanner(),
+            checkpoints=store,
+            effects=src_ledger,
+            approval=crash_approval,
+            max_steps=4,
+        )
+        with pytest.raises(SystemExit):
+            kernel1.run("发个通知", state=RunState(run_id="fork-src"))
+        src_ledger.close()
+        source_effect = store.load("fork-src").pending_effect_id
+        assert source_effect == "fork-src:1:1"
+
+        # 两个分支用各自的 ledger 文件（独立账本），确保隔离。
+        state_a = fork(store, "fork-src", "turn_001_step_001", new_run_id="fork-approve")
+        state_b = fork(store, "fork-src", "turn_001_step_001", new_run_id="fork-reject")
+        # fork 必须清掉 pending_effect_id，否则两个分支会共享源 run 的 effect 行。
+        assert state_a.pending_effect_id is None
+        assert state_b.pending_effect_id is None
+        assert state_a.pending_tool is not None and state_b.pending_tool is not None
+
+        ledger_a = SqliteEffectLedger(str(Path(tmp) / "effects_a.db"))
+        ledger_b = SqliteEffectLedger(str(Path(tmp) / "effects_b.db"))
+        counter_a: list[int] = []
+        counter_b: list[int] = []
+        kernel_a = AgentKernel(
+            model=ScriptedModel([FINAL_SCRIPT]),
+            tools=CountingTool(counter_a),
+            planner=ReactPlanner(),
+            checkpoints=store,
+            effects=ledger_a,
+            approval=lambda call: True,
+            max_steps=4,
+        )
+        result_a = kernel_a.resume(state_a)
+        kernel_b = AgentKernel(
+            model=ScriptedModel([FINAL_SCRIPT]),
+            tools=CountingTool(counter_b),
+            planner=ReactPlanner(),
+            checkpoints=store,
+            effects=ledger_b,
+            approval=lambda call: False,
+            max_steps=4,
+        )
+        result_b = kernel_b.resume(state_b)
+        ledger_a.close()
+        ledger_b.close()
+
+        # 批准分支真实执行一次；拒绝分支不执行；各自账本里有独立 effect 行。
+        assert result_a.status == "done" and counter_a == [1]
+        assert result_b.status == "done" and counter_b == []
+        with SqliteEffectLedger(str(Path(tmp) / "effects_a.db")) as la:
+            eff_a = la.get("fork-approve:1:1")
+        with SqliteEffectLedger(str(Path(tmp) / "effects_b.db")) as lb:
+            eff_b = lb.get("fork-reject:1:1")
+        assert eff_a is not None and eff_a.status == "succeeded"
+        assert eff_b is not None and eff_b.status == "rejected"
+        # 源 run 的 effect 行没被任何分支改过（fork 后仍 proposed）。
+        with SqliteEffectLedger(ledger_path) as lsrc:
+            eff_src = lsrc.get("fork-src:1:1")
+        assert eff_src is not None and eff_src.status == "proposed"
+
+
+def test_tool_name_mismatch_raises():
+    """SPEC-80 验收点2：零参工具 now/ping 的 hash_arguments({}) 相同，
+    在账本里用 now 的 effect_id 塞一行，再用 ping 命中：必须被 tool_name 校验拦下。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = SqliteEffectLedger(str(Path(tmp) / "effects.db"))
+        from agent_kernel.types import Effect
+
+        ledger.propose(Effect("collide-tool:1:1", "collide-tool", "now", hash_arguments({})))
+        kernel = AgentKernel(
+            model=ScriptedModel([json.dumps({"thought": "ping", "tool": "ping", "args": {}})]),
+            tools=TwoNoArgTool(),
+            planner=ReactPlanner(),
+            effects=ledger,
+            max_steps=4,
+        )
+        try:
+            with pytest.raises(EffectArgumentMismatchError):
+                kernel.run("ping", state=RunState(run_id="collide-tool"))
+        finally:
+            ledger.close()
+
+
+def test_run_id_mismatch_raises():
+    """SPEC-80 验收点2：effect.run_id 与 state.run_id 不一致（fork 串行的典型症状）
+    也要被拦下。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = SqliteEffectLedger(str(Path(tmp) / "effects.db"))
+        from agent_kernel.types import Effect
+
+        # 塞一行 run_id=other-run，但用当前 run 的 effect_id 命中。
+        ledger.propose(
+            Effect("this-run:1:1", "other-run", "send", hash_arguments({"to": "a@b.com"}))
+        )
+        kernel = AgentKernel(
+            model=ScriptedModel([TOOL_CALL_SCRIPT]),
+            tools=CountingTool([]),
+            planner=ReactPlanner(),
+            effects=ledger,
+            max_steps=4,
+        )
+        try:
+            with pytest.raises(EffectArgumentMismatchError):
+                kernel.run("发个通知", state=RunState(run_id="this-run"))
+        finally:
+            ledger.close()
+
+
+def test_requires_approval_fail_closed_without_approval():
+    """SPEC-80 验收点3：工具声明 requires_approval=True，内核没配 approval 回调，
+    必须在执行前抛 ApprovalRequiredError，绝不静默跑。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        counter: list[int] = []
+        policy = ToolEffectPolicy(requires_approval=True)
+        ledger = SqliteEffectLedger(str(Path(tmp) / "effects.db"))
+        kernel = AgentKernel(
+            model=ScriptedModel([TOOL_CALL_SCRIPT]),
+            tools=CountingTool(counter, effect_policy=policy),
+            planner=ReactPlanner(),
+            effects=ledger,
+            max_steps=4,
+        )
+        try:
+            with pytest.raises(ApprovalRequiredError):
+                kernel.run("发个通知", state=RunState(run_id="approval-run"))
+            assert counter == []  # 工具确实没被执行
+        finally:
+            ledger.close()
+
+
+def test_requires_approval_passes_when_approval_configured():
+    """requires_approval=True 但内核配了 approval 回调：行为不变，正常走审批流。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        counter: list[int] = []
+        policy = ToolEffectPolicy(requires_approval=True)
+        ledger = SqliteEffectLedger(str(Path(tmp) / "effects.db"))
+        kernel = AgentKernel(
+            model=ScriptedModel([TOOL_CALL_SCRIPT, FINAL_SCRIPT]),
+            tools=CountingTool(counter, effect_policy=policy),
+            planner=ReactPlanner(),
+            effects=ledger,
+            approval=lambda call: True,
+            max_steps=4,
+        )
+        try:
+            state = kernel.run("发个通知", state=RunState(run_id="approval-ok"))
+            assert state.status == "done" and counter == [1]
+        finally:
+            ledger.close()
+
+
+def test_rejected_effect_terminal_state():
+    """SPEC-80 验收点4：HITL 否决后 effect 行落到 "rejected"，不是卡在 "proposed"。"""
+
+    def crash_approval(_call):
+        raise SystemExit("crash")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ckpt = str(Path(tmp) / "runs")
+        ledger_path = str(Path(tmp) / "effects.db")
+        store = JsonCheckpointStore(ckpt)
+        counter: list[int] = []
+
+        src_ledger = SqliteEffectLedger(ledger_path)
+        kernel1 = AgentKernel(
+            model=ScriptedModel([TOOL_CALL_SCRIPT]),
+            tools=CountingTool(counter),
+            planner=ReactPlanner(),
+            checkpoints=store,
+            effects=src_ledger,
+            approval=crash_approval,
+            max_steps=4,
+        )
+        with pytest.raises(SystemExit):
+            kernel1.run("发个通知", state=RunState(run_id="reject-run"))
+        src_ledger.close()
+
+        state = store.load("reject-run")
+        ledger2 = SqliteEffectLedger(ledger_path)
+        kernel2 = AgentKernel(
+            model=ScriptedModel([FINAL_SCRIPT]),
+            tools=CountingTool(counter),
+            planner=ReactPlanner(),
+            checkpoints=store,
+            effects=ledger2,
+            approval=lambda call: False,
+            max_steps=4,
+        )
+        kernel2.resume(state)
+        eff = ledger2.get("reject-run:1:1")
+        ledger2.close()
+        assert eff is not None and eff.status == "rejected"
+
+
+def test_mark_unknown_effect_id_raises():
+    """SPEC-80 验收点5：对不存在的 effect_id 调 mark_* 必须抛，不能静默成功。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        with SqliteEffectLedger(str(Path(tmp) / "effects.db")) as ledger:
+            with pytest.raises(EffectNotFoundError):
+                ledger.mark_succeeded("does-not-exist", "x")
+            with pytest.raises(EffectNotFoundError):
+                ledger.mark_approved("does-not-exist")
+            with pytest.raises(EffectNotFoundError):
+                ledger.mark_executing("does-not-exist")
+            with pytest.raises(EffectNotFoundError):
+                ledger.mark_failed("does-not-exist", "x")
+            with pytest.raises(EffectNotFoundError):
+                ledger.mark_rejected("does-not-exist")
+
+
+def test_illegal_transition_raises():
+    """SPEC-80 验收点5/6：succeeded -> executing 是非法迁移，必须抛。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        with SqliteEffectLedger(str(Path(tmp) / "effects.db")) as ledger:
+            from agent_kernel.types import Effect
+
+            ledger.propose(Effect("tx:1", "tx", "send", hash_arguments({})))
+            ledger.mark_approved("tx:1")
+            ledger.mark_executing("tx:1")
+            ledger.mark_succeeded("tx:1", "ok")
+            # 终态后再迁移：非法
+            with pytest.raises(IllegalEffectTransitionError):
+                ledger.mark_executing("tx:1")
+            with pytest.raises(IllegalEffectTransitionError):
+                ledger.mark_succeeded("tx:1", "again")
+            with pytest.raises(IllegalEffectTransitionError):
+                ledger.mark_rejected("tx:1")
+
+
+def test_replay_preserves_artifacts():
+    """SPEC-80 验收点7：工具产生 ArtifactRef 后崩溃，恢复回放的 ToolResult
+    仍带 artifacts，不是只剩扁平文本。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        ckpt = str(Path(tmp) / "runs")
+        ledger_path = str(Path(tmp) / "effects.db")
+        counter: list[int] = []
+
+        class ArtifactTool(ToolPort):
+            def __init__(self):
+                self.calls = 0
+
+            def list_tools(self):
+                return [ToolSpec("send", "有副作用", {}, effect_policy=ToolEffectPolicy())]
+
+            def call(self, name, args):
+                self.calls += 1
+                return ToolResult(
+                    content="sent-with-big-payload",
+                    artifacts=[
+                        ArtifactRef(uri="file:///runs/artifacts/abc.txt", mime_type="text/plain", description="完整结果")
+                    ],
+                )
+
+        store1 = JsonCheckpointStore(ckpt)
+        real_ledger = SqliteEffectLedger(ledger_path)
+        original_mark_succeeded = real_ledger.mark_succeeded
+
+        def crashing_mark_succeeded(effect_id, result_ref):
+            original_mark_succeeded(effect_id, result_ref)
+            raise SystemExit("账本已 succeeded，checkpoint 没落盘")
+
+        real_ledger.mark_succeeded = crashing_mark_succeeded
+        kernel1 = AgentKernel(
+            model=ScriptedModel([TOOL_CALL_SCRIPT]),
+            tools=ArtifactTool(),
+            planner=ReactPlanner(),
+            checkpoints=store1,
+            effects=real_ledger,
+            max_steps=4,
+        )
+        with pytest.raises(SystemExit):
+            kernel1.run("发个通知", state=RunState(run_id="art-run"))
+        real_ledger.mark_succeeded = original_mark_succeeded
+        real_ledger.close()
+
+        # 回放后从消息历史里验证 artifacts 被还原（_finish_tool 会把 artifact uri 拼进 tool 消息文本）。
+        store2 = JsonCheckpointStore(ckpt)
+        ledger2 = SqliteEffectLedger(ledger_path)
+        state = store2.load("art-run")
+        kernel2 = AgentKernel(
+            model=ScriptedModel([FINAL_SCRIPT]),
+            tools=ArtifactTool(),
+            planner=ReactPlanner(),
+            checkpoints=store2,
+            effects=ledger2,
+            max_steps=4,
+        )
+        final_state = kernel2.resume(state)
+        ledger2.close()
+        tool_msgs = "".join(m.content for m in final_state.messages if m.role == "tool")
+        assert "file:///runs/artifacts/abc.txt" in tool_msgs  # artifact uri 被回放重建
+        assert "sent-with-big-payload" in tool_msgs
+
+
 if __name__ == "__main__":
     test_effect_id_scoped_by_turn_not_just_step()
     test_argument_hash_mismatch_raises()
     test_executing_not_idempotent_blocks_resume()
     test_executing_idempotent_retries_on_resume()
     test_succeeded_effect_replays_without_reexecuting()
+    test_fork_branches_execute_independently()
+    test_tool_name_mismatch_raises()
+    test_run_id_mismatch_raises()
+    test_requires_approval_fail_closed_without_approval()
+    test_requires_approval_passes_when_approval_configured()
+    test_rejected_effect_terminal_state()
+    test_mark_unknown_effect_id_raises()
+    test_illegal_transition_raises()
+    test_replay_preserves_artifacts()
     print("OK: effect ledger 测试全部通过")

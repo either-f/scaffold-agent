@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ...ports import MemoryPort
+from ...types import MemoryHit
 
 RerankFn = Callable[[str, list[str]], list[str]]
 
@@ -25,14 +26,15 @@ class RerankedMemory(MemoryPort):
         self.rerank_fn = rerank_fn
         self.over_fetch = over_fetch
 
-    def add(self, run_id: str, role: str, content: str) -> None:
-        self.inner.add(run_id, role, content)
+    def add(self, run_id: str, role: str, content: str, identity: str | None = None) -> None:
+        self.inner.add(run_id, role, content, identity=identity)
 
-    def search(self, query: str, k: int = 5) -> list[str]:
-        candidates = self.inner.search(query, k=k * self.over_fetch)
+    def search(self, query: str, k: int = 5, identity: str | None = None) -> list[MemoryHit]:
+        candidates = self.inner.search(query, k=k * self.over_fetch, identity=identity)
         if not candidates:
             return candidates
-        return self.rerank_fn(query, candidates)[:k]
+        by_content = {str(hit): hit for hit in candidates}
+        return [by_content.get(str(item), MemoryHit(str(item), source="reranked")) for item in self.rerank_fn(query, candidates)[:k]]
 
 
 def flashrank_rerank_fn(model_name: str = "ms-marco-MiniLM-L-12-v2") -> RerankFn:
