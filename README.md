@@ -713,6 +713,137 @@ uv run mlflow ui --backend-store-uri sqlite:///runs/mlflow.db   # 可视化查�
 [evals/baseline-m12-mlflow-eval-real.json](evals/baseline-m12-mlflow-eval-real.json)。
 训练侧 harness 就是 M11 的 `finetune/` 数据管线→训练→评测闭环，不重复建一套。
 
+## API 层：内容列表与审批
+
+`adapters/api/app.py` 的 `create_app(store)` 暴露招聘/GitHub趋势/AI日报三模块共用的
+REST 接口（`/api/modules`、`/api/items`、`/api/items/{id}/approve|reject`），`store`
+外部注入，不在模块里建全局连接：
+
+```powershell
+.tools\uv\Scripts\uv.exe sync --extra api
+.venv\Scripts\python.exe -c "import uvicorn; from agent_kernel.adapters.api.app import create_app; from agent_kernel.adapters.content_store import SqliteContentStore; uvicorn.run(create_app(SqliteContentStore('runs/content.db')))"
+```
+
+`create_app(store, user_store=None, auth_settings=None)` 里 `user_store` 是可选参数：
+不传则只有内容 API；传了 `SqliteUserStore` 就额外挂载注册/登录路由（见下节）。
+
+## 注册/登录（移植自 blog-backend）
+
+把 blog-backend（Java Spring Security + MySQL/Redis/RabbitMQ）的注册登录语义，
+按本仓库「sqlite 单文件 + 零外部服务」惯例重写进 adapter 层：
+
+- `adapters/auth_store.py`：`SqliteUserStore`（`users`/`verify_codes`/`jwt_whitelist`
+  三张表）+ `AuthManager`（BCrypt 密码、HMAC256 JWT、6 位验证码），只引 `bcrypt`/`PyJWT`，
+  符合「内核零依赖、adapter 才引依赖」；
+- `adapters/api/auth.py`：路由层，响应沿用 `ResponseResult` 契约（HTTP 200 +
+  `{"code","msg","data"}`，错误码 1001 密码错 / 1002 未登录 / 1005 验证码错 / 1006 已存在）。
+
+```powershell
+.tools\uv\Scripts\uv.exe sync --extra api
+$env:APP_MODE = 'demo'
+.venv\Scripts\python.exe run_server.py
+```
+
+启动入口 `run_server.py` 通过 `AuthSettings.from_env()` 读取配置，令牌有效期默认 7 天。
+直接调用 `create_app()` 的旧示例保留离线 demo 兼容行为，不是正式启动配置。
+
+- `APP_MODE=real` 为启动默认：必须配置至少 32 个字符的 `JWT_KEY`，空库不自动填充演示内容。
+- `APP_MODE=demo` 使用独立的 `runs/demo/` 数据目录，验证码仅在此模式回显供本机联调。
+- `APP_DATA_DIR` 可指定独立目录。切换模式不会清理既有数据库；旧 `runs/` 若已有演示内容，应另选目录体验空白真实工作台。
+- `PLATFORM_OWNER_ID` 指定已有账户的数字 ID；未配置时管理采集、规则、来源和全局内容审批的接口不可用。个人收藏仍按登录用户隔离。
+- 真实模式没有邮件发送器时，获取验证码返回业务码 `1013`，不打印或回显验证码；已有账户仍可登录。邮件发送器通过 `AuthSettings.send_email` 注入。
+- `ENABLE_SCHEDULER=1` 在真实模式显式启用周期采集；默认关闭。调度时区为 `Asia/Shanghai`，同模块不重叠、过期触发合并，随应用生命周期关闭。演示模式不启动周期采集。
+
+接口：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/public/ask-code?email=&type=register\|reset\|resetEmail` | 发验证码（dev 模式回显 `dev_code`） |
+| POST | `/user/register` | `{username,password,code,email}` 注册 |
+| POST | `/user/reset-confirm` | `{code,email}` 校验重置验证码 |
+| POST | `/user/reset-password` | `{password,code,email}` 重置密码 |
+| POST | `/user/login` | `{username,password}` 登录，返回 `data.token`/`data.expire` |
+| GET | `/user/auth/info` | `Authorization: Bearer <token>` 取当前用户 |
+| POST | `/user/logout` | 使 token 失效 |
+
+与原版差异（无 Redis/RabbitMQ/MySQL 下的取舍）：登录由表单改为 JSON、不移植 RBAC
+（`roles`/`permissions` 恒为空）、验证码仅 demo 下打日志 + 回显，真实 SMTP 通过
+`AuthSettings.send_email` 钩子接入。离线单测见 `tests/test_auth.py`。
+
+## 平台页面 API（前端 Scaffold Platform）
+
+`adapters/platform_store.py` 的 `PlatformStore` 是前端 6 个页面（首页聚合流 + 招聘 +
+项目雷达 + AI日报 + 自动化 + 数据源）的数据存储：jobs/projects/news/automations/
+sources/todos/ranks、个人动作与采集运行记录等 sqlite 表，`seed_demo()` 仅在显式演示启动时灌入设计稿样例。
+`adapters/api/platform.py` 暴露页面级聚合端点，一次请求返回整页数据（列表 + 侧边栏）：
+
+```powershell
+.tools\uv\Scripts\uv.exe sync --extra api
+$env:APP_MODE = 'demo'
+.venv\Scripts\python.exe run_server.py
+```
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/platform/home` | 首页：stats + 聚合 feed + 热榜 + 待办 + 自动化 |
+| GET | `/api/platform/jobs?city=&direction=&grad_year=&match_min=&referral=` | 招聘（多值筛选用逗号分隔） |
+| GET | `/api/platform/projects?tech=&language=&star=1k\|10k\|hot` | 项目雷达 |
+| GET | `/api/platform/news` | AI 日报 |
+| GET | `/api/platform/automations` | 自动化（规则/日志/待确认/渠道） |
+| GET | `/api/platform/sources` | 数据源（列表/采集概览/异常） |
+| POST | `/api/platform/{jobs}/{id}/favorite`、`/apply` | 收藏（toggle）/投递，需 `Bearer` token，未登录 401 |
+| POST | `/api/platform/projects/{id}/favorite`、`/watch` | 项目收藏/关注（toggle） |
+| POST | `/api/platform/news/{id}/read_later` | 稍后阅读（toggle） |
+| POST | `/api/platform/automations/{id}/toggle` | 启停自动化 |
+| POST | `/api/platform/todos/{id}/done` | 完成待办 |
+| POST | `/api/platform/sources/{id}/reconnect` | 数据源重新认证 |
+| POST | `/api/platform/collect/{module_id}` | 手动触发采集（`github-trending`/`ai-daily-news`/`job-hunter`） |
+| POST | `/api/platform/collection-runs` | `{module_id}`，返回 202 与 run_id；同模块运行中复用已有 ID |
+| GET | `/api/platform/collection-runs/{run_id}` | 查询状态、时间、新增/更新/跳过和安全错误原因，需 owner |
+| GET | `/api/platform/collection-runs?module_id=&limit=20` | 最近运行列表，需 owner |
+| GET | `/api/platform/jobs/{id}`、`projects/{id}`、`news/{id}` | 按实体类型和 ID 读取详情、来源及当前用户动作 |
+| POST | `/api/platform/jobs` | 手动岗位，title 必填；保存为当前用户私有记录，返回 201 |
+| PATCH | `/api/platform/jobs/{id}` | 仅编辑本人手动岗位；省略字段保持不变，source_url 可显式清空 |
+| GET | `/api/platform/my/items?kind=&action=&limit=50&offset=0` | 当前用户的收藏/关注/阅读记录；limit 为 1–100 |
+| PUT | `/api/platform/my/items/{kind}/{id}/actions` | 显式设置 favorite/watch/read_later/read 布尔值，重复请求幂等 |
+| GET | `/api/platform/applications` | 当前用户的岗位机会、下一步及变更历史 |
+| PUT | `/api/platform/jobs/{id}/application` | 保存 stage、next_step、next_at、note、next_step_done；省略可选字段保留原值 |
+
+写端点里的用户动作（收藏/投递/关注/稍后阅读）走 `user_actions` 表（`user_id` +
+目标 + 动作，唯一约束），与注册登录的 `SqliteUserStore` 通过 user_id 关联；
+`create_app` 把 `AuthManager` 一并传给平台路由解析 `Bearer` token。
+
+个人机会阶段为 saved/preparing/applied/interviewing/offer/rejected/archived。
+applied 只表示用户记录了投递，不表示系统向招聘网站提交了简历。历史 applied 动作仍兼容展示。
+手动岗位不会自动抓取填写的 URL；来源只接受不含账号密码的 http(s) 链接。
+真实模式的来源/规则/采集和全局内容审批仅允许配置的 owner 管理；个人动作不需要 owner 身份。
+没有实际运行的新规则/来源配置、日报生成和邮件推送仍属于演示能力，不会返回真实发送成功。
+
+### 真实采集（scheduler + platform_collectors）
+
+`adapters/platform_collectors.py` 当前接入 GitHub Trending Python 日榜、V2EX 热门话题的
+AI 关键词筛选、V2EX 酷工作公开版。registry 中声明的其他 scraper 并不等于平台已经接通。
+岗位匹配度未评估时为未知；解析到的来源 ID 和原始 URL 用于后续查询、去重和更新。
+
+新异步入口 `POST /api/platform/collection-runs` 快速返回运行 ID，通过 GET 查询结束结果。
+状态包括 queued/running/succeeded/partial/failed/interrupted；成功零新增与实际失败区分记录。
+后台使用独立数据库连接，网络请求期间不占用写事务；重启遗留 queued/running 标为 interrupted。
+旧同步 collect 在真实模式共用受控执行过程，活动任务冲突返回 409，采集失败返回 502。
+真实模式不会通过“重新认证”按钮伪造来源正常；缺少真实运行时展示未知或空统计。
+
+规则和采集模块通过 module_id 对应，启停会同步 APScheduler 的暂停/恢复。
+周期采集仅在真实模式且 `ENABLE_SCHEDULER=1` 时启动，未开启时仍可由 owner 手动触发。
+
+`create_app(..., platform_store=None)` 里 `platform_store` 同样可选：不传不影响既有
+内容 API 与 auth。离线单测见 `tests/test_platform_api.py`（含 seed 幂等、筛选、
+各端点字段、登录后收藏/投递、启停/完成/重连、本地采集）。前端 `frontend/src/`
+通过 `useApi()`（`api.ts`）拉取这些端点，筛选条件变化会自动重新请求；写操作走
+`postApi()`，未登录自动弹登录框（`AuthModal`），token 存 localStorage。
+
+`adapters/api/scheduler.py` 的 `build_scheduler(callback)` 按 `module_registry.MODULES`
+的 cron 表达式定时调用 callback；API 的 collection_runtime 负责运行记录与后台执行。
+当前为单实例工作台，不能用多个服务进程同时执行启动恢复和调度。
+
 ## 回归门禁
 
 ```powershell
