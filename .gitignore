@@ -5,3 +5,9 @@ runs/
 __pycache__/
 *.pyc
 *.egg-info/
+
+# 本机 agent 配置（.claude/skills 是指向 .agents 的绝对路径软链）
+.claude/
+# 浏览器验收产物（日志、截图）
+.playwright-cli/
+output/
