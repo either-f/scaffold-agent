@@ -38,7 +38,7 @@
 | B03 后端 | 已实施、采集/去重验收通过 | 三个公开来源按 ID/URL 去重、无随机匹配分；不是其他 registry scraper 或外网稳定性的验收 |
 | B04–B06 后端 | 已实施、六态联调通过 | 后台运行、失败/部分失败/重启中断、来源状态与轮询停止，详见下文 |
 | B07–B10 后端 | 已实施、闭环验收通过 | 详情、手动岗位、个人动作、机会阶段与历史，含刷新及重启后的持久化 |
-| B11 后端 | 本地门禁通过、远程待验证 | CI 配置已增加 API 回归和 frontend build/lint；未推送、远程 CI 未运行 |
+| B11 后端 | 完成、远程 CI 已验证 | 2026-09-22 推送后 run 35713049511 八个 job 全绿，含新增的 platform 与 frontend |
 | I01 联调 | 完成 | 2026-09-10 隔离浏览器验收通过，见下「2026-09-10 验收记录」 |
 | I02 联调 | 完成 | 2026-09-10 隔离浏览器验收通过，含 202 触发、状态展示与轮询停止 |
 
@@ -263,9 +263,59 @@ owner 自动化页统计来自真实 run（已启用规则 3 / 最近记录 4 / 
 
 自动化规则真实 CRUD；数据源真实配置 / OAuth / Cookie 管理；AI 日报真实生成；
 邮件 / 飞书 / 微信通知；招聘网站外站自动投递；团队 / RBAC / 多租户 / 分布式 worker。
-远程 CI 仍未验证（未提交、未推送）。
+远程 CI 已于 2026-09-22 首次验证通过，见下「2026-09-22 提交、推送与远程 CI」。
 
 ### 进程与工作区
 
 本轮启动的隔离服务 `8032`/`5182` 已关闭。旧端口 `8010`/`5173`、`8021`/`5181` 可能仍有其他 agent 进程，
 下轮启动前重新检查端口，不要批量 kill。工作区未提交、未推送，未跟踪文件保持原样。
+
+## 2026-09-22 提交、推送与远程 CI
+
+用户明确要求后才做提交与推送；此前各轮均只改工作树。
+
+### 入库前的整理
+
+`.gitignore` 收敛，以下不入库：`.claude/`（内容是指向 `.agents/` 的绝对路径软链，换机器即失效）、
+`.playwright-cli/` 与 `output/`（验收日志与截图，含 `frontend/` 下同名目录）、
+`frontend/.env`（本机 API 地址，模板保留 `.env.example`）、
+`frontend/scaffold-platform-redesign.zip`（与同名目录内容重复）。
+
+仓库是 PUBLIC。推送前把 `HANDOFF.md`/`IMPLEMENTATION.md` 里计划原件路径中的本机用户名
+改为 `%USERPROFILE%\.codex\...`。提交内容扫描过硬编码口令/令牌，未发现；
+`auth_store.py` 的 `jwt-key` 只是 demo 默认值，real 模式要求 `JWT_KEY` 至少 32 字符。
+
+### 分批提交
+
+gitignore → scrapers + module_registry + 依赖 extras → 平台后端 API → 后端测试 →
+前端 → CI → skills → 文档，共 8 个提交。
+
+### 与远程的合并
+
+推送被拒：远程 main 已有另一会话推送的 18 个 kernel 提交（SPEC-80~96）。
+`git merge origin/main` 后三处冲突均按并集解决：
+
+- `.gitignore`：两边新增条目合并；
+- `pyproject.toml` 的 dev 组：`pytest-cov` / `ruff` / `pyright` 与本轮的 `httpx` 合并；
+- `.github/workflows/ci.yml`：远程的 `lint-type` / `test` / `wheel-install` 与本轮的
+  `platform` / `frontend` 并存。
+
+同时给远程 `test` job 的安装行补 `api,scrapers` 与 `httpx`——该 job 跑全量 `tests/`，
+SPEC-84 之后不再放行跳过，缺依赖会让新平台测试在 collection 阶段直接失败。
+
+合并后本地 `pytest tests/` 为 `279 passed, 4 skipped, 10 failed`，10 个失败全在
+`tests/test_mcp.py`，原因是本地 venv 缺可选依赖 `mcp`，CI 的 test job 装了 `.[model,mcp]`，不复现。
+另按远程 CI 的口径跑过 `ruff check src tests evals examples` 与 `pyright src`，均 0 错误。
+
+### 远程 CI：第一次运行失败，已修复
+
+首次推送后 `offline` job 的 `python examples/record_demos.py --check` 失败：
+`research.cast 字节不匹配`。原因确实是本轮引入的——`demo_research.py` 会打印 skills_library
+的可用技能列表，新增三个 SKILL.md 后该行由 `['web-research']` 变成四项，逐字节比对不再通过。
+
+重新录制三个 demo，只有 `research.cast` 的技能列表行变化，`files.cast`/`ops.cast` 字节不变。
+提交后 run 35713049511 八个 job 全绿：`lint-type` ×2、`test` ×2、`wheel-install`、`offline`、
+`platform`、`frontend`。这是远程 CI 第一次真正验证通过。
+
+`examples/record_demos.py` 有两处小问题，本轮未改：`--check` 分支并不写文件，失败文案
+「（已重新生成）」有误导；`main()` 中 `all(生成器)` 会短路，`research` 失败时 `files`/`ops` 不会被检查。
